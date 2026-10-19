@@ -537,7 +537,6 @@
 
         let activeTabIndex = 1;
         let activeGradesSubTab = 0;
-        let activeGradesMonthSubTab = 0;
         let currentModalType = "";
         let currentAttendanceMap = {};
         let currentLoadedAttendanceStudents = [];
@@ -568,6 +567,7 @@
             appState.schedule = Array.isArray(appState.schedule) ? appState.schedule : [];
             appState.savedSessions = Array.isArray(appState.savedSessions) ? appState.savedSessions : [];
             appState.attendanceRecord = appState.attendanceRecord && typeof appState.attendanceRecord === 'object' ? appState.attendanceRecord : {};
+            appState.gradesSettings = { includeMonth3: false, ...(appState.gradesSettings || {}) };
             appState.classes.forEach(cls => { cls.name = convertSchoolTerm(cls.name); });
             appState.students.forEach(student => {
                 student.class = convertSchoolTerm(student.class);
@@ -1747,7 +1747,9 @@
             showToast("جاري تحميل بيانات الجلسة للتعديل...");
         }
 
-        // --- 6. SCHOOL GRADES: monthly averages, midyear, annual work, final exam and result ---
+        // --- 6. SCHOOL GRADES: modern student cards, mobile editing, complete-term calculations ---
+        let currentGradeEditContext = null;
+
         function gradeNumber(value) {
             if (value === '' || value === null || value === undefined) return null;
             const number = Number(value);
@@ -1761,139 +1763,37 @@
             return getSelectedReportSubject();
         }
 
-        const gradeMonthDailyFields = [
-            { key: 'grammar', label: 'قواعد', max: 30 },
-            { key: 'literature', label: 'أدب', max: 20 },
-            { key: 'homework', label: 'واجب بيتي', max: 10 },
-            { key: 'activities', label: 'نشاطات', max: 10 },
-            { key: 'notebook', label: 'دفتر', max: 10 },
-            { key: 'discipline', label: 'انضباط', max: 10 },
-            { key: 'attendance', label: 'حضور', max: 10 }
-        ];
-        const gradeMonthWrittenFields = [
-            { key: 'grammar', label: 'قواعد', max: 35 },
-            { key: 'literature', label: 'أدب', max: 30 },
-            { key: 'composition', label: 'إنشاء', max: 25 },
-            { key: 'reading', label: 'مطالعة', max: 10 }
-        ];
-
-        function createEmptyMonthDetail() {
-            const daily = {}, written = {};
-            gradeMonthDailyFields.forEach(field => { daily[field.key] = ''; });
-            gradeMonthWrittenFields.forEach(field => { written[field.key] = ''; });
-            return { daily, written };
-        }
-
-        function createEmptyMonthDetails() {
-            return { 1: createEmptyMonthDetail(), 2: createEmptyMonthDetail(), 3: createEmptyMonthDetail() };
-        }
-
-        function createEmptyMonthEditedFlags() {
-            return { 1: false, 2: false, 3: false };
-        }
-
         function createEmptyGradeRecord() {
             return {
                 term1Month1: '', term1Month2: '', term1Month3: '',
-                term1MonthDetails: createEmptyMonthDetails(), term1MonthDetailsEdited: createEmptyMonthEditedFlags(),
-                midyearMode: 'components', midyearDirect: '', midyearWritten: '', midyearOral: '', midyearMonth1: '', midyearMonth2: '',
                 term2Month1: '', term2Month2: '', term2Month3: '',
-                term2MonthDetails: createEmptyMonthDetails(), term2MonthDetailsEdited: createEmptyMonthEditedFlags(),
-                finalExam: ''
+                midyearMode: 'direct', midyearDirect: '', midyearWritten: '', midyearOral: '', midyearMonth1: '', midyearMonth2: '',
+                finalExam: '', monthDetails: {}
             };
-        }
-
-        function ensureGradeRecordStructure(record) {
-            if (!record || typeof record !== 'object') return createEmptyGradeRecord();
-            ['term1', 'term2'].forEach(prefix => {
-                const detailsKey = `${prefix}MonthDetails`;
-                const editedKey = `${prefix}MonthDetailsEdited`;
-                if (!record[detailsKey] || typeof record[detailsKey] !== 'object') record[detailsKey] = createEmptyMonthDetails();
-                if (!record[editedKey] || typeof record[editedKey] !== 'object') record[editedKey] = createEmptyMonthEditedFlags();
-                [1, 2, 3].forEach(month => {
-                    const defaults = createEmptyMonthDetail();
-                    const current = record[detailsKey][month];
-                    if (!current || typeof current !== 'object') record[detailsKey][month] = defaults;
-                    else {
-                        record[detailsKey][month] = {
-                            daily: { ...defaults.daily, ...(current.daily || {}) },
-                            written: { ...defaults.written, ...(current.written || {}) }
-                        };
-                    }
-                    if (record[editedKey][month] === undefined) record[editedKey][month] = false;
-                });
-            });
-            return record;
         }
 
         function getStudentGradeRecord(student, subjectName = getGradeSubjectContext(), create = true) {
             if (!student) return createEmptyGradeRecord();
             const subject = String(subjectName || 'all').trim();
-            let record;
-            if (!subject || subject === 'all' || (normalizeAcademicText(student.subject) === normalizeAcademicText(subject) && !student.gradesBySubject?.[subject])) {
-                record = student;
-            } else {
-                if (!student.gradesBySubject || typeof student.gradesBySubject !== 'object') student.gradesBySubject = {};
-                if (!student.gradesBySubject[subject] && create) student.gradesBySubject[subject] = createEmptyGradeRecord();
-                record = student.gradesBySubject[subject] || createEmptyGradeRecord();
+            if (!subject || subject === 'all') {
+                const ownSubject = String(student.subject || '').trim();
+                if (ownSubject && student.gradesBySubject && student.gradesBySubject[ownSubject]) {
+                    const ownRecord = student.gradesBySubject[ownSubject];
+                    if (!ownRecord.monthDetails || typeof ownRecord.monthDetails !== 'object') ownRecord.monthDetails = {};
+                    return ownRecord;
+                }
+                if (!student.monthDetails || typeof student.monthDetails !== 'object') student.monthDetails = {};
+                return student;
             }
-            return ensureGradeRecordStructure(record);
-        }
-
-        function getMonthDetailScore(record, prefix, month) {
-            record = ensureGradeRecordStructure(record);
-            const details = record[`${prefix}MonthDetails`][month];
-            const dailyValues = gradeMonthDailyFields.map(field => gradeNumber(details.daily[field.key]));
-            const writtenValues = gradeMonthWrittenFields.map(field => gradeNumber(details.written[field.key]));
-            const anyComponentEntered = dailyValues.some(value => value !== null) || writtenValues.some(value => value !== null);
-            const isDetailed = Boolean(record[`${prefix}MonthDetailsEdited`][month]);
-
-            // Once a month has been edited with the detailed form, clearing every field clears that month.
-            if (isDetailed && !anyComponentEntered) return null;
-            // Older saved monthly totals remain available until detailed marks are entered for that month.
-            if (!anyComponentEntered) return gradeNumber(record[`${prefix}Month${month}`]);
-
-            const dailyTotal = dailyValues.reduce((sum, value) => sum + (value === null ? 0 : value), 0);
-            const writtenTotal = writtenValues.reduce((sum, value) => sum + (value === null ? 0 : value), 0);
-            return (dailyTotal + writtenTotal) / 2;
-        }
-
-        function getMonthlyAverage(record, prefix, count = 3) {
-            const values = [];
-            for (let i = 1; i <= count; i++) {
-                const value = getMonthDetailScore(record, prefix, i);
-                if (value !== null) values.push(value);
+            if (normalizeAcademicText(student.subject) === normalizeAcademicText(subject) && !student.gradesBySubject?.[subject]) {
+                if (!student.monthDetails || typeof student.monthDetails !== 'object') student.monthDetails = {};
+                return student;
             }
-            return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
-        }
-
-        function getTerm1Mark(student) { return getMonthlyAverage(getStudentGradeRecord(student, getGradeSubjectContext(), false), 'term1', 3); }
-        function getTerm2Mark(student) { return getMonthlyAverage(getStudentGradeRecord(student, getGradeSubjectContext(), false), 'term2', 3); }
-        function getTermMonthMark(student, prefix, month) {
-            return getMonthDetailScore(getStudentGradeRecord(student, getGradeSubjectContext(), false), prefix, month);
-        }
-
-        function getMidyearMark(student) {
-            const record = getStudentGradeRecord(student, getGradeSubjectContext(), false);
-            const written = gradeNumber(record.midyearWritten);
-            const oral = gradeNumber(record.midyearOral);
-            if (written !== null || oral !== null) return Math.min(100, (written || 0) + (oral || 0));
-            // Backward compatibility for previously saved direct /100 marks.
-            return gradeNumber(record.midyearDirect) || 0;
-        }
-
-        function getAnnualWorkMark(student) {
-            return (getTerm1Mark(student) + getMidyearMark(student) + getTerm2Mark(student)) / 3;
-        }
-
-        function getFinalResultMark(student) {
-            const record = getStudentGradeRecord(student, getGradeSubjectContext(), false);
-            return (getAnnualWorkMark(student) + (gradeNumber(record.finalExam) || 0)) / 2;
-        }
-
-        function gradeDisplay(value) {
-            const n = Number(value) || 0;
-            return Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+            if (!student.gradesBySubject || typeof student.gradesBySubject !== 'object') student.gradesBySubject = {};
+            if (!student.gradesBySubject[subject] && create) student.gradesBySubject[subject] = createEmptyGradeRecord();
+            const record = student.gradesBySubject[subject] || createEmptyGradeRecord();
+            if (!record.monthDetails || typeof record.monthDetails !== 'object') record.monthDetails = {};
+            return record;
         }
 
         function getGradeSubjectOptions() {
@@ -1902,12 +1802,98 @@
             return Array.from(names).filter(Boolean).sort((a, b) => a.localeCompare(b, 'ar'));
         }
 
+        function getDefaultStudentGradeSubject(student) {
+            const selected = (document.getElementById('grd-subject-select') || {}).value || 'all';
+            if (selected !== 'all') return selected;
+            if (student && String(student.subject || '').trim()) return String(student.subject).trim();
+            const linked = appState.subjects.find(subject =>
+                normalizeAcademicText(subject.class) === normalizeAcademicText(student?.class) &&
+                normalizeAcademicText(subject.section) === normalizeAcademicText(student?.section) &&
+                normalizeAcademicText(subject.studyType || 'صباحي') === normalizeAcademicText(student?.studyType || 'صباحي'));
+            return linked ? linked.name : 'all';
+        }
+
+        function isThirdMonthRequired() {
+            return !!(appState.gradesSettings && appState.gradesSettings.includeMonth3);
+        }
+
+        function getMonthlyMark(record, prefix, monthNumber) {
+            if (!record) return null;
+            const key = `${prefix}Month${monthNumber}`;
+            const detail = record.monthDetails && record.monthDetails[key];
+            if (detail) {
+                if (detail.mode === 'components') {
+                    const fields = ['attendance', 'activity', 'behavior', 'grammar', 'literature', 'composition'];
+                    const values = fields.map(field => gradeNumber(detail[field]));
+                    if (values.some(value => value === null)) return null;
+                    return Math.min(100, Math.max(0, values.reduce((sum, value) => sum + value, 0)));
+                }
+                const daily = gradeNumber(detail.daily);
+                const paper = gradeNumber(detail.paper);
+                if (daily === null || paper === null) return null;
+                return Math.min(100, Math.max(0, daily + paper));
+            }
+            return gradeNumber(record[key]);
+        }
+
+        function getMonthlyAverage(record, prefix) {
+            const requiredMonths = isThirdMonthRequired() ? [1, 2, 3] : [1, 2];
+            const values = requiredMonths.map(month => getMonthlyMark(record, prefix, month));
+            // لا يظهر معدل الفصل إلا بعد إدخال جميع الأشهر المطلوبة حسب الإعداد.
+            if (values.some(value => value === null)) return null;
+            return values.reduce((sum, value) => sum + value, 0) / values.length;
+        }
+
+        function getTerm1Mark(student, subjectName = getGradeSubjectContext()) {
+            return getMonthlyAverage(getStudentGradeRecord(student, subjectName, false), 'term1');
+        }
+
+        function getTerm2Mark(student, subjectName = getGradeSubjectContext()) {
+            return getMonthlyAverage(getStudentGradeRecord(student, subjectName, false), 'term2');
+        }
+
+        function getMidyearMark(student, subjectName = getGradeSubjectContext()) {
+            const record = getStudentGradeRecord(student, subjectName, false);
+            if ((record.midyearMode || 'direct') !== 'components') return gradeNumber(record.midyearDirect);
+            const written = gradeNumber(record.midyearWritten);
+            const oral = gradeNumber(record.midyearOral);
+            if (written === null || oral === null) return null;
+            const values = [written + oral];
+            [record.midyearMonth1, record.midyearMonth2].forEach(value => {
+                const parsed = gradeNumber(value);
+                if (parsed !== null) values.push(parsed);
+            });
+            return values.reduce((sum, value) => sum + value, 0) / values.length;
+        }
+
+        function getAnnualWorkMark(student, subjectName = getGradeSubjectContext()) {
+            const first = getTerm1Mark(student, subjectName);
+            const midyear = getMidyearMark(student, subjectName);
+            const second = getTerm2Mark(student, subjectName);
+            if (first === null || midyear === null || second === null) return null;
+            return (first + midyear + second) / 3;
+        }
+
+        function getFinalResultMark(student, subjectName = getGradeSubjectContext()) {
+            const annual = getAnnualWorkMark(student, subjectName);
+            const record = getStudentGradeRecord(student, subjectName, false);
+            const finalExam = gradeNumber(record.finalExam);
+            if (annual === null || finalExam === null) return null;
+            return (annual + finalExam) / 2;
+        }
+
+        function gradeDisplay(value) {
+            if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—';
+            const n = Number(value);
+            return Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+        }
+
         function updateGradesSectionOptions() {
             const classSelect = document.getElementById('grd-class-select');
             const sectionSelect = document.getElementById('grd-section-select');
             if (!classSelect || !sectionSelect) return;
-            const previous = sectionSelect.value;
-            const selectedClass = classSelect.value;
+            const previous = sectionSelect.value || 'all';
+            const selectedClass = classSelect.value || 'all';
             const sections = new Map();
             appState.classes.filter(cls => selectedClass === 'all' || normalizeAcademicText(cls.name) === normalizeAcademicText(selectedClass))
                 .forEach(cls => {
@@ -1915,64 +1901,58 @@
                     if (!sections.has(value)) sections.set(value, `الشعبة ${cls.section} - ${cls.studyType || 'صباحي'}`);
                 });
             sectionSelect.innerHTML = `<option value="all">جميع الشعب</option>` + Array.from(sections.entries()).map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`).join('');
-            if (sections.has(previous)) sectionSelect.value = previous;
+            if (previous === 'all' || sections.has(previous)) sectionSelect.value = previous;
         }
 
         function renderGradesTab(container) {
+            if (!appState.gradesSettings || typeof appState.gradesSettings !== 'object') appState.gradesSettings = { includeMonth3: false };
             const classes = Array.from(new Set(appState.classes.map(cls => cls.name))).sort((a, b) => a.localeCompare(b, 'ar'));
             const classOptions = classes.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
             const subjects = getGradeSubjectOptions();
             const subjectOptions = subjects.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
-            const tabs = ['الفصل الأول', 'نصف السنة', 'الفصل الثاني', 'السعي السنوي', 'الامتحان النهائي', 'النتيجة'];
+            const periods = [
+                ['term1Month1', 'الشهر الأول - الفصل الأول'], ['term1Month2', 'الشهر الثاني - الفصل الأول'], ['term1Month3', 'الشهر الثالث - الفصل الأول'],
+                ['midyear', 'نصف السنة /100'],
+                ['term2Month1', 'الشهر الأول - الفصل الثاني'], ['term2Month2', 'الشهر الثاني - الفصل الثاني'], ['term2Month3', 'الشهر الثالث - الفصل الثاني'],
+                ['finalExam', 'الامتحان النهائي /100']
+            ];
             container.innerHTML = `
                 <div class="bg-white rounded-3xl p-3.5 shadow-sm border border-slate-200/80 mb-3.5">
-                    <h3 class="font-black text-slate-800 text-xs mb-2.5 flex items-center gap-1.5"><i class="fa-solid fa-award text-amber-500"></i><span>قائمة الدرجات المدرسية</span></h3>
-                    <div class="grid grid-cols-2 gap-2 mb-3">
-                        <div>
-                            <label class="block text-[10px] font-bold text-slate-600 mb-1">الصف:</label>
-                            <select id="grd-class-select" onchange="updateGradesSectionOptions(); renderGradesContent()" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold text-slate-700 outline-none"><option value="all">جميع الصفوف</option>${classOptions}</select>
-                        </div>
-                        <div>
-                            <label class="block text-[10px] font-bold text-slate-600 mb-1">الشعبة:</label>
-                            <select id="grd-section-select" onchange="renderGradesContent()" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold text-slate-700 outline-none"><option value="all">جميع الشعب</option></select>
-                        </div>
-                        <div class="col-span-2">
-                            <label class="block text-[10px] font-bold text-slate-600 mb-1">المادة الدراسية:</label>
-                            <select id="grd-subject-select" onchange="renderGradesContent()" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold text-slate-700 outline-none"><option value="all">جميع المواد</option>${subjectOptions}</select>
-                        </div>
+                    <div class="flex items-start justify-between gap-2 mb-3">
+                        <div><h3 class="font-black text-slate-800 text-sm flex items-center gap-1.5"><i class="fa-solid fa-award text-amber-500"></i><span>قائمة الدرجات العصرية</span></h3><p class="text-[10px] text-slate-400 mt-1">بطاقات الطلبة وحساب الدرجات تلقائياً</p></div>
+                        <span class="text-[9px] px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 font-black border border-emerald-100"><i class="fa-solid fa-hard-drive ml-1"></i>حفظ محلي</span>
                     </div>
-                    <div class="flex bg-slate-200/80 p-1 rounded-2xl text-[10px] font-black text-slate-600 gap-1 overflow-x-auto no-scrollbar">
-                        ${tabs.map((name, index) => `<button onclick="switchGradesSubTab(${index})" id="grd-subtab-${index}" class="flex-1 py-2 px-2 rounded-xl transition-all whitespace-nowrap ${index === activeGradesSubTab ? 'bg-slate-900 text-amber-400 shadow-xs' : 'hover:bg-slate-300 text-slate-700'}">${name}</button>`).join('')}
+                    <div class="grid grid-cols-2 gap-2 mb-2.5">
+                        <div><label class="block text-[10px] font-bold text-slate-600 mb-1">الصف</label><select id="grd-class-select" onchange="updateGradesSectionOptions(); renderGradesContent()" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold text-slate-700 outline-none"><option value="all">جميع الصفوف</option>${classOptions}</select></div>
+                        <div><label class="block text-[10px] font-bold text-slate-600 mb-1">الشعبة</label><select id="grd-section-select" onchange="renderGradesContent()" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold text-slate-700 outline-none"><option value="all">جميع الشعب</option></select></div>
+                        <div class="col-span-2"><label class="block text-[10px] font-bold text-slate-600 mb-1">المادة الدراسية</label><select id="grd-subject-select" onchange="renderGradesContent()" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold text-slate-700 outline-none"><option value="all">جميع المواد (حسب مادة الطالب)</option>${subjectOptions}</select></div>
+                        <div class="col-span-2"><label class="block text-[10px] font-bold text-slate-600 mb-1">بحث عن اسم الطالب</label><div class="relative"><i class="fa-solid fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i><input id="grd-search-input" type="search" oninput="renderGradesContent()" placeholder="اكتب اسم الطالب..." class="w-full pr-9 pl-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold outline-none focus:border-indigo-400"></div></div>
+                        <div class="col-span-2"><label class="block text-[10px] font-bold text-slate-600 mb-1">الدرجة الحالية المعروضة</label><select id="grd-period-select" onchange="renderGradesContent()" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold text-slate-700 outline-none">${periods.map(([value,label]) => `<option value="${value}">${label}</option>`).join('')}</select></div>
+                    </div>
+                    <label class="flex items-center gap-2 p-2.5 rounded-xl bg-amber-50 border border-amber-100 text-[10px] font-bold text-amber-900 cursor-pointer"><input id="grd-include-month3" type="checkbox" ${isThirdMonthRequired() ? 'checked' : ''} onchange="setThirdMonthRequired(this.checked)" class="accent-amber-600 w-4 h-4"><span>تفعيل الشهر الثالث ضمن معدل الفصل (يتطلب إدخال الأشهر الثلاثة)</span></label>
+                    <div class="grid grid-cols-2 gap-2 mt-3">
+                        <button onclick="exportGradesCSV()" class="py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black flex justify-center items-center gap-1.5"><i class="fa-solid fa-file-csv"></i>تصدير CSV</button>
+                        <button onclick="openGradesReports()" class="py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-amber-400 text-[10px] font-black flex justify-center items-center gap-1.5"><i class="fa-solid fa-print"></i>تقارير وطباعة PDF</button>
                     </div>
                 </div>
-                <div id="grades-subtab-content"></div>`;
+                <div id="grades-subtab-content" class="space-y-3"></div>`;
             updateGradesSectionOptions();
             renderGradesContent();
         }
 
-        function switchGradesSubTab(subIndex) {
-            activeGradesSubTab = Math.max(0, Math.min(5, Number(subIndex) || 0));
-            for (let i = 0; i < 6; i++) {
-                const btn = document.getElementById(`grd-subtab-${i}`);
-                if (btn) btn.className = `flex-1 py-2 px-2 rounded-xl transition-all whitespace-nowrap ${i === activeGradesSubTab ? 'bg-slate-900 text-amber-400 font-black shadow-xs' : 'hover:bg-slate-300 text-slate-700 font-bold'}`;
-            }
+        function setThirdMonthRequired(enabled) {
+            if (!appState.gradesSettings || typeof appState.gradesSettings !== 'object') appState.gradesSettings = {};
+            appState.gradesSettings.includeMonth3 = !!enabled;
+            persistLocalState();
             renderGradesContent();
-        }
-
-        function switchGradesMonthSubTab(monthIndex) {
-            activeGradesMonthSubTab = Math.max(0, Math.min(2, Number(monthIndex) || 0));
-            renderGradesContent();
-        }
-
-        function getGradesMonthTabsHtml() {
-            const labels = ['الشهر الأول', 'الشهر الثاني', 'الشهر الثالث (اختياري)'];
-            return `<div class="flex bg-slate-200/80 p-1 rounded-2xl text-[10px] font-black text-slate-600 gap-1 overflow-x-auto no-scrollbar mb-3">${labels.map((label, index) => `<button onclick="switchGradesMonthSubTab(${index})" class="flex-1 py-2 px-2 rounded-xl transition-all whitespace-nowrap ${index === activeGradesMonthSubTab ? 'bg-slate-900 text-amber-400 shadow-xs' : 'hover:bg-slate-300 text-slate-700'}">${label}</button>`).join('')}</div>`;
+            showToast(enabled ? 'تم تفعيل الشهر الثالث؛ لن يُحسب الفصل حتى تكتمل الأشهر الثلاثة' : 'سيُحسب معدل الفصل من الشهرين الأول والثاني بعد اكتمالهما');
         }
 
         function getGradeFilteredStudents() {
             const selectedClass = (document.getElementById('grd-class-select') || {}).value || 'all';
             const selectedSection = (document.getElementById('grd-section-select') || {}).value || 'all';
             const selectedSubject = (document.getElementById('grd-subject-select') || {}).value || 'all';
+            const search = normalizeAcademicText((document.getElementById('grd-search-input') || {}).value || '');
             return sortStudentsAlphabetically(appState.students.filter(student => {
                 if (selectedClass !== 'all' && normalizeAcademicText(student.class) !== normalizeAcademicText(selectedClass)) return false;
                 if (selectedSection !== 'all') {
@@ -1982,154 +1962,251 @@
                 if (selectedSubject !== 'all') {
                     const directMatch = normalizeAcademicText(student.subject) === normalizeAcademicText(selectedSubject);
                     const classLinkMatch = isAssignedSubjectToClass(selectedSubject, student.class, student.section, student.studyType || 'صباحي');
-                    if (!directMatch && !classLinkMatch) return false;
+                    const hasSubjectRecord = !!(student.gradesBySubject && student.gradesBySubject[selectedSubject]);
+                    if (!directMatch && !classLinkMatch && !hasSubjectRecord) return false;
                 }
+                if (search && !normalizeAcademicText(student.name).includes(search)) return false;
                 return true;
             }));
         }
 
-        function renderGradeRows(filtered, inputRenderer, computedRenderer) {
-            return filtered.map((student, index) => `<tr class="border-b border-slate-100 text-[11px]">
-                <td class="p-2 text-center font-bold">${index + 1}</td>
-                <td class="p-2 font-bold text-slate-800 whitespace-nowrap">${escapeHtml(student.name)}</td>
-                ${inputRenderer ? inputRenderer(student) : ''}${computedRenderer ? computedRenderer(student) : ''}
-            </tr>`).join('');
+        function getGradePeriodLabel(period) {
+            const labels = {
+                term1Month1: 'الشهر الأول - الفصل الأول', term1Month2: 'الشهر الثاني - الفصل الأول', term1Month3: 'الشهر الثالث - الفصل الأول',
+                midyear: 'نصف السنة', term2Month1: 'الشهر الأول - الفصل الثاني', term2Month2: 'الشهر الثاني - الفصل الثاني', term2Month3: 'الشهر الثالث - الفصل الثاني',
+                finalExam: 'الامتحان النهائي'
+            };
+            return labels[period] || 'الدرجة';
         }
 
-        function gradeTableCard(title, description, headers, rows, saveHandler = '') {
-            return `<div class="bg-white rounded-3xl p-3.5 shadow-sm border border-slate-200/80">
-                <div class="bg-indigo-50 border border-indigo-200 p-2.5 rounded-2xl mb-3 text-indigo-900"><p class="text-[10px] font-black">${title}</p><p class="text-[10px] mt-1">${description}</p></div>
-                <div class="overflow-x-auto"><table class="w-full text-right"><thead class="bg-slate-900 text-amber-400 text-[10px]"><tr>${headers.map(header => `<th class="p-2 text-center whitespace-nowrap">${header}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>
-                ${saveHandler ? `<button onclick="${saveHandler}()" class="w-full mt-3 bg-slate-900 text-amber-400 py-2.5 rounded-xl font-black text-xs shadow-md hover:bg-slate-800 transition-colors flex items-center justify-center gap-1.5"><i class="fa-solid fa-floppy-disk"></i><span>حفظ الدرجات</span></button>` : ''}
-            </div>`;
+        function getGradePeriodValue(student, subject, period) {
+            const record = getStudentGradeRecord(student, subject, false);
+            if (period === 'midyear') return getMidyearMark(student, subject);
+            if (period === 'finalExam') return gradeNumber(record.finalExam);
+            const match = String(period || '').match(/^(term1|term2)Month([123])$/);
+            return match ? getMonthlyMark(record, match[1], Number(match[2])) : null;
         }
 
-        function renderMonthlyGradeEditor(filtered, prefix, termTitle, accentClass) {
-            const month = activeGradesMonthSubTab + 1;
-            const dailyHeaders = gradeMonthDailyFields.map(field => `<th>يومي: ${field.label} /${field.max}</th>`);
-            const writtenHeaders = gradeMonthWrittenFields.map(field => `<th>تحريري: ${field.label} /${field.max}</th>`);
-            const rows = renderGradeRows(filtered, student => {
-                const g = getStudentGradeRecord(student);
-                const details = g[`${prefix}MonthDetails`][month];
-                const dailyInputs = gradeMonthDailyFields.map(field => `<td class="p-1.5 text-center"><input type="number" min="0" max="${field.max}" step="0.25" id="grade-${prefix}-m${month}-daily-${field.key}-${student.id}" value="${details.daily[field.key] ?? ''}" aria-label="${field.label}" class="w-12 bg-slate-50 border border-slate-200 p-1 rounded-lg text-center text-[10px] font-bold outline-none"></td>`).join('');
-                const writtenInputs = gradeMonthWrittenFields.map(field => `<td class="p-1.5 text-center"><input type="number" min="0" max="${field.max}" step="0.25" id="grade-${prefix}-m${month}-written-${field.key}-${student.id}" value="${details.written[field.key] ?? ''}" aria-label="${field.label}" class="w-12 bg-slate-50 border border-slate-200 p-1 rounded-lg text-center text-[10px] font-bold outline-none"></td>`).join('');
-                const dailyTotal = gradeMonthDailyFields.reduce((sum, field) => sum + (gradeNumber(details.daily[field.key]) || 0), 0);
-                const writtenTotal = gradeMonthWrittenFields.reduce((sum, field) => sum + (gradeNumber(details.written[field.key]) || 0), 0);
-                const monthMark = getMonthDetailScore(g, prefix, month);
-                return `${dailyInputs}${writtenInputs}<td class="p-2 text-center font-black text-indigo-700">${gradeDisplay(dailyTotal)}</td><td class="p-2 text-center font-black text-sky-700">${gradeDisplay(writtenTotal)}</td><td class="p-2 text-center font-black ${accentClass}">${monthMark === null ? '—' : gradeDisplay(monthMark)}</td>`;
-            });
-            const monthsSummary = [1, 2, 3].map(i => {
-                const enteredCount = filtered.reduce((count, student) => count + (getTermMonthMark(student, prefix, i) !== null ? 1 : 0), 0);
-                const classAverage = filtered.length ? filtered.reduce((sum, student) => sum + (getTermMonthMark(student, prefix, i) === null ? 0 : getTermMonthMark(student, prefix, i)), 0) / Math.max(1, enteredCount) : 0;
-                return `<div class="bg-white rounded-xl border border-slate-200 p-2 text-center"><p class="text-[9px] text-slate-500 font-bold">${['الشهر الأول','الشهر الثاني','الشهر الثالث'][i-1]}${i === 3 ? ' (اختياري)' : ''}</p><p class="text-sm font-black ${accentClass}">${enteredCount ? gradeDisplay(classAverage) : '—'}<span class="text-[9px] text-slate-400"> /100</span></p><p class="text-[8px] text-slate-400">متوسط المسجلين</p></div>`;
-            }).join('');
-            return `${getGradesMonthTabsHtml()}
-                <div class="bg-indigo-50 border border-indigo-100 p-2.5 rounded-2xl mb-3">
-                    <p class="text-[10px] font-black text-indigo-900">${termTitle} — ${['الشهر الأول','الشهر الثاني','الشهر الثالث (اختياري)'][month-1]}</p>
-                    <p class="text-[9px] text-indigo-800 mt-1 leading-relaxed">درجة اليومي من 100، ودرجة التحريري من 100. درجة الشهري = (اليومي + التحريري) ÷ 2. تُحسب درجة الفصل من متوسط الشهرين أو الأشهر الثلاثة حسب الدرجات المدخلة، ويُهمل الشهر الفارغ. الدرجات الشهرية القديمة تبقى محفوظة إلى أن تُدخل تفاصيل الشهر وتحفظها.</p>
-                </div>
-                <div class="grid grid-cols-3 gap-2 mb-3">${monthsSummary}</div>
-                ${gradeTableCard(`${termTitle} / ${['الشهر الأول','الشهر الثاني','الشهر الثالث (اختياري)'][month-1]}`, 'اليومي: قواعد 30 + أدب 20 + واجب بيتي 10 + نشاطات 10 + دفتر 10 + انضباط 10 + حضور 10. التحريري: قواعد 35 + أدب 30 + إنشاء 25 + مطالعة 10.', [...['<th class="p-2 text-center">#</th>','<th class="p-2">اسم الطالب</th>'], ...dailyHeaders, ...writtenHeaders, '<th>مجموع اليومي /100</th>', '<th>مجموع التحريري /100</th>', '<th>درجة الشهري /100</th>'], rows, prefix === 'term1' ? 'saveTerm1Grades' : 'saveTerm2Grades')}`;
+        function gradeMetric(label, value, color = 'indigo') {
+            const palette = {indigo:'bg-indigo-50 text-indigo-800 border-indigo-100', sky:'bg-sky-50 text-sky-800 border-sky-100', amber:'bg-amber-50 text-amber-800 border-amber-100', emerald:'bg-emerald-50 text-emerald-800 border-emerald-100', violet:'bg-violet-50 text-violet-800 border-violet-100'};
+            const shown = value === null ? 'غير مكتمل' : `${gradeDisplay(value)} / 100`;
+            return `<div class="rounded-xl border ${palette[color] || palette.indigo} p-2.5 min-w-0"><p class="text-[9px] font-bold opacity-75 leading-relaxed">${label}</p><p class="text-sm font-black mt-1 truncate">${shown}</p></div>`;
         }
 
         function renderGradesContent() {
             const container = document.getElementById('grades-subtab-content');
             if (!container) return;
             const filtered = getGradeFilteredStudents();
+            const period = (document.getElementById('grd-period-select') || {}).value || 'term1Month1';
             if (!filtered.length) {
-                container.innerHTML = `<div class="bg-white rounded-3xl p-5 text-center text-xs text-slate-400 font-bold">لا يوجد طلبة مطابقون للصف والشعبة والمادة المحددة</div>`;
+                container.innerHTML = `<div class="bg-white rounded-3xl p-6 text-center shadow-sm border border-slate-200"><div class="w-12 h-12 rounded-2xl bg-slate-100 text-slate-400 mx-auto flex items-center justify-center text-lg mb-2"><i class="fa-solid fa-user-graduate"></i></div><p class="text-xs text-slate-500 font-bold">لا يوجد طلبة مطابقون للصف والشعبة والمادة والبحث المحدد</p></div>`;
                 return;
             }
-            const nameCols = ['<th class="p-2 text-center">#</th>', '<th class="p-2">اسم الطالب</th>'];
-            let html = '';
-            if (activeGradesSubTab === 0) {
-                html = renderMonthlyGradeEditor(filtered, 'term1', 'الفصل الأول', 'text-indigo-700');
-            } else if (activeGradesSubTab === 1) {
-                const rows = renderGradeRows(filtered, s => {
-                    const g = getStudentGradeRecord(s);
-                    return `<td class="p-1.5"><input type="number" min="0" max="80" step="0.25" id="grade-mid-written-${s.id}" value="${g.midyearWritten ?? ''}" placeholder="/80" class="w-16 bg-slate-50 border border-slate-200 p-1 rounded-lg text-center text-[10px] font-bold"></td>
-                    <td class="p-1.5"><input type="number" min="0" max="20" step="0.25" id="grade-mid-oral-${s.id}" value="${g.midyearOral ?? ''}" placeholder="/20" class="w-16 bg-slate-50 border border-slate-200 p-1 rounded-lg text-center text-[10px] font-bold"></td>`;
-                }, s => `<td class="p-2 text-center font-black text-indigo-700">${gradeDisplay(getMidyearMark(s))} / 100</td>`);
-                html = gradeTableCard('نصف السنة', 'درجة نصف السنة = التحريري من 80 + الشفوي من 20 = 100. تُعرض الدرجات القديمة المحفوظة كقيمة سابقة إلى حين إدخال التحريري والشفوي.', [...nameCols, '<th>تحريري /80</th>', '<th>شفوي /20</th>', '<th>نصف السنة /100</th>'], rows, 'saveMidyearGrades');
-            } else if (activeGradesSubTab === 2) {
-                html = renderMonthlyGradeEditor(filtered, 'term2', 'الفصل الثاني', 'text-sky-700');
-            } else if (activeGradesSubTab === 3) {
-                const rows = renderGradeRows(filtered, null, s => `<td class="p-2 text-center font-bold text-indigo-700">${gradeDisplay(getTerm1Mark(s))}</td><td class="p-2 text-center font-bold text-sky-700">${gradeDisplay(getMidyearMark(s))}</td><td class="p-2 text-center font-bold text-violet-700">${gradeDisplay(getTerm2Mark(s))}</td><td class="p-2 text-center font-black text-amber-700">${gradeDisplay(getAnnualWorkMark(s))} / 100</td>`);
-                html = gradeTableCard('السعي السنوي', 'السعي السنوي = (معدل الفصل الأول + درجة نصف السنة + معدل الفصل الثاني) ÷ 3. معدل كل فصل يُحسب من شهرين أو ثلاثة حسب الأشهر المسجلة.', [...nameCols, '<th>الفصل الأول</th>', '<th>نصف السنة</th>', '<th>الفصل الثاني</th>', '<th>السعي السنوي</th>'], rows);
-            } else if (activeGradesSubTab === 4) {
-                const rows = renderGradeRows(filtered, s => {
-                    const g = getStudentGradeRecord(s);
-                    return `<td class="p-2 text-center"><input type="number" min="0" max="100" step="0.25" id="grade-final-${s.id}" value="${g.finalExam ?? ''}" class="w-16 bg-slate-50 border p-1 rounded-lg text-center font-bold text-purple-900 outline-none"></td>`;
-                }, s => `<td class="p-2 text-center font-black text-amber-700">${gradeDisplay(getAnnualWorkMark(s))}</td>`);
-                html = gradeTableCard('الامتحان النهائي', 'أدخل درجة الامتحان النهائي من 100. تُستخدم مع السعي السنوي لحساب النتيجة من 100.', [...nameCols, '<th>الامتحان النهائي /100</th>', '<th>السعي السنوي</th>'], rows, 'saveFinalGrades');
-            } else {
-                const rows = renderGradeRows(filtered, null, s => {
-                    const annual = getAnnualWorkMark(s);
-                    const record = getStudentGradeRecord(s);
-                    const final = gradeNumber(record.finalExam) || 0;
-                    const result = getFinalResultMark(s);
-                    const passed = result >= 50;
-                    return `<td class="p-2 text-center">${gradeDisplay(annual)}</td><td class="p-2 text-center">${gradeDisplay(final)}</td><td class="p-2 text-center font-black text-lg ${passed ? 'text-emerald-700' : 'text-rose-700'}">${gradeDisplay(result)} / 100</td><td class="p-2 text-center"><span class="px-2 py-1 rounded-full text-[10px] font-black ${passed ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}">${passed ? 'ناجح' : 'راسب'}</span></td>`;
-                });
-                html = gradeTableCard('النتيجة المدرسية', 'النتيجة النهائية = (السعي السنوي + درجة الامتحان النهائي) ÷ 2، من 100.', [...nameCols, '<th>السعي السنوي</th>', '<th>النهائي</th>', '<th>النتيجة /100</th>', '<th>الحالة</th>'], rows);
+            const cards = filtered.map(student => {
+                const subject = getDefaultStudentGradeSubject(student);
+                const current = getGradePeriodValue(student, subject, period);
+                const termAverage = period.startsWith('term2') ? getTerm2Mark(student, subject) : getTerm1Mark(student, subject);
+                const termLabel = period.startsWith('term2') ? 'معدل الفصل الثاني' : 'معدل الفصل الأول';
+                const annual = getAnnualWorkMark(student, subject);
+                const result = getFinalResultMark(student, subject);
+                const resultText = result === null ? 'بانتظار اكتمال الدرجات' : (result >= 50 ? 'ناجح' : 'راسب');
+                const resultClass = result === null ? 'bg-slate-100 text-slate-500' : (result >= 50 ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800');
+                return `<article class="bg-white rounded-3xl p-3.5 shadow-sm border border-slate-200/80">
+                    <div class="flex items-start justify-between gap-2 mb-3">
+                        <div class="flex items-center gap-2.5 min-w-0"><div class="w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-100 to-sky-50 text-indigo-700 border border-indigo-100 flex items-center justify-center flex-shrink-0"><i class="fa-solid fa-user-graduate"></i></div><div class="min-w-0"><h4 class="text-xs font-black text-slate-800 leading-relaxed">${escapeHtml(student.name || 'بدون اسم')}</h4><p class="text-[9px] text-slate-400 mt-0.5">${escapeHtml(student.class || '')} • شعبة ${escapeHtml(student.section || '—')} • ${escapeHtml(student.studyType || 'صباحي')}</p><p class="text-[9px] text-indigo-500 mt-0.5 truncate">${escapeHtml(subject === 'all' ? (student.subject || 'المادة غير محددة') : subject)}</p></div></div>
+                        <span class="text-[9px] px-2 py-1 rounded-full font-black whitespace-nowrap ${resultClass}">${resultText}</span>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2">
+                        ${gradeMetric(`الدرجة الحالية • ${getGradePeriodLabel(period)}`, current, 'indigo')}
+                        ${gradeMetric(termLabel, termAverage, 'sky')}
+                        ${gradeMetric('السعي السنوي', annual, 'amber')}
+                        ${gradeMetric('النتيجة النهائية', result, 'emerald')}
+                    </div>
+                    <div class="flex gap-2 mt-3">
+                        <button onclick='openGradeEditModal(${JSON.stringify(String(student.id))})' class="flex-1 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-amber-400 text-[10px] font-black flex items-center justify-center gap-1.5"><i class="fa-solid fa-pen-to-square"></i>تعديل الدرجة</button>
+                        <button onclick='openGradeDetailsModal(${JSON.stringify(String(student.id))})' class="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-black flex items-center justify-center gap-1.5"><i class="fa-solid fa-eye"></i>عرض التفاصيل</button>
+                    </div>
+                </article>`;
+            }).join('');
+            container.innerHTML = `<div class="flex justify-between items-center px-1 mb-1"><span class="text-[10px] text-slate-500 font-bold">عدد الطلبة: ${filtered.length}</span><span class="text-[9px] text-slate-400">${isThirdMonthRequired() ? 'الحساب يتطلب 3 أشهر' : 'الحساب يتطلب شهرين'}</span></div>${cards}`;
+        }
+
+        function getGradeInputNumber(id, max) {
+            const element = document.getElementById(id);
+            if (!element || element.value === '') return null;
+            const number = Number(element.value);
+            if (!Number.isFinite(number)) return null;
+            return Math.max(0, Math.min(max, number));
+        }
+
+        function gradeInputField(id, label, value, max, placeholder = '') {
+            return `<div><label for="${id}" class="block text-[10px] text-slate-600 font-bold mb-1">${label} <span class="text-slate-400">/${max}</span></label><input id="${id}" type="number" inputmode="decimal" min="0" max="${max}" step="0.25" value="${value === null || value === undefined ? '' : escapeHtml(value)}" placeholder="${placeholder}" oninput="updateGradeMonthPreview()" class="w-full border border-slate-200 bg-slate-50 rounded-xl p-2.5 text-sm font-black text-slate-800 outline-none focus:border-indigo-400"></div>`;
+        }
+
+        function updateGradeEntryMode() {
+            // تم اعتماد التوزيع التفصيلي فقط: يومي من 20 وورقة من 80.
+            updateGradeMonthPreview();
+        }
+
+        function updateGradeMonthPreview() {
+            const preview = document.getElementById('grade-month-preview');
+            if (!preview) return;
+            const ids = [['grade-comp-attendance',10],['grade-comp-activity',5],['grade-comp-behavior',5],['grade-comp-grammar',30],['grade-comp-literature',30],['grade-comp-composition',20]];
+            const values = ids.map(([id,max]) => getGradeInputNumber(id,max));
+            const entered = values.filter(value => value !== null).length;
+            const total = entered === values.length ? values.reduce((sum, value) => sum + value, 0) : null;
+            preview.innerHTML = total === null
+                ? `أكمل مكونات الدرجة الستة ليظهر المجموع (${entered} من 6 مكتملة).`
+                : `مجموع الشهر: <strong>${gradeDisplay(total)} / 100</strong>`;
+        }
+
+        function showGradeModal(title, iconClass, html, showSubmit = true) {
+            const modal = document.getElementById('action-modal');
+            const box = document.getElementById('modal-box');
+            document.getElementById('modal-title').innerText = title;
+            document.getElementById('modal-subtitle').innerText = 'الدرجات المدرسية • حفظ محلي تلقائي';
+            document.getElementById('modal-icon').className = `fa-solid ${iconClass}`;
+            document.getElementById('modal-body').innerHTML = html;
+            const submit = document.getElementById('modal-submit-btn');
+            if (submit) {
+                submit.style.display = showSubmit ? '' : 'none';
+                const textEl = submit.querySelector('span');
+                if (textEl) textEl.innerText = showSubmit ? 'حفظ الدرجة' : 'تأكيد الحفظ';
             }
-            container.innerHTML = html;
+            modal.classList.remove('opacity-0', 'pointer-events-none');
+            box.classList.remove('scale-95');
+            box.classList.add('scale-100');
         }
 
-        function saveMonthlyTermGrades(prefix, students) {
-            const month = activeGradesMonthSubTab + 1;
-            students.forEach(student => {
-                const record = getStudentGradeRecord(student);
-                const details = record[`${prefix}MonthDetails`][month];
-                let hasAnyValue = false;
-                const readField = (group, field) => {
-                    const input = document.getElementById(`grade-${prefix}-m${month}-${group}-${field.key}-${student.id}`);
-                    if (!input || input.value === '') return '';
-                    const numeric = Math.max(0, Math.min(field.max, Number(input.value) || 0));
-                    hasAnyValue = true;
-                    return numeric;
-                };
-                gradeMonthDailyFields.forEach(field => { details.daily[field.key] = readField('daily', field); });
-                gradeMonthWrittenFields.forEach(field => { details.written[field.key] = readField('written', field); });
-                record[`${prefix}MonthDetailsEdited`][month] = true;
-                // Keep a computed numeric snapshot for compatibility with older report/export routines.
-                const score = hasAnyValue
-                    ? (gradeMonthDailyFields.reduce((sum, field) => sum + (gradeNumber(details.daily[field.key]) || 0), 0) + gradeMonthWrittenFields.reduce((sum, field) => sum + (gradeNumber(details.written[field.key]) || 0), 0)) / 2
-                    : '';
-                record[`${prefix}Month${month}`] = score;
-            });
+        function openGradeEditModal(studentId) {
+            const student = appState.students.find(item => String(item.id) === String(studentId));
+            if (!student) { showToast('لم يتم العثور على الطالب', 'error'); return; }
+            const subject = getDefaultStudentGradeSubject(student);
+            const period = (document.getElementById('grd-period-select') || {}).value || 'term1Month1';
+            currentGradeEditContext = { studentId: String(student.id), subject, period };
+            currentModalType = 'grade_edit';
+            const record = getStudentGradeRecord(student, subject, true);
+            let fields = '';
+            if (period === 'midyear' || period === 'finalExam') {
+                const fieldId = period === 'midyear' ? 'grade-entry-direct100' : 'grade-entry-final100';
+                const label = period === 'midyear' ? 'درجة نصف السنة' : 'درجة الامتحان النهائي';
+                const value = period === 'midyear' ? (record.midyearDirect ?? '') : (record.finalExam ?? '');
+                fields = `<div class="rounded-2xl bg-indigo-50 border border-indigo-100 p-3"><p class="text-[10px] text-indigo-800 font-bold">${label} من 100</p><div class="mt-2">${gradeInputField(fieldId, label, value, 100)}</div></div>`;
+            } else {
+                const match = period.match(/^(term1|term2)Month([123])$/);
+                const key = match ? `${match[1]}Month${match[2]}` : 'term1Month1';
+                if (!record.monthDetails || typeof record.monthDetails !== 'object') record.monthDetails = {};
+                const savedDetail = record.monthDetails[key] || null;
+                fields = `<div class="rounded-2xl bg-indigo-50 border border-indigo-100 p-3"><p class="text-xs font-black text-indigo-900">${getGradePeriodLabel(period)}</p><p class="text-[10px] text-indigo-700 mt-1">إدخال الدرجة بالتوزيع التفصيلي فقط.</p>
+                    <div class="mt-3">
+                        <p class="text-[10px] font-black text-slate-700 mb-2">اليومي من 20 (حضور 10 + نشاط 5 + سلوك 5)</p>
+                        <div class="grid grid-cols-3 gap-2">
+                            ${gradeInputField('grade-comp-attendance','الحضور',savedDetail?.attendance ?? '',10)}
+                            ${gradeInputField('grade-comp-activity','النشاط',savedDetail?.activity ?? '',5)}
+                            ${gradeInputField('grade-comp-behavior','السلوك',savedDetail?.behavior ?? '',5)}
+                        </div>
+                        <p class="text-[10px] font-black text-slate-700 mt-3 mb-2">الورقة من 80 (قواعد 30 + أدب 30 + إنشاء 20)</p>
+                        <div class="grid grid-cols-3 gap-2">
+                            ${gradeInputField('grade-comp-grammar','القواعد',savedDetail?.grammar ?? '',30)}
+                            ${gradeInputField('grade-comp-literature','الأدب',savedDetail?.literature ?? '',30)}
+                            ${gradeInputField('grade-comp-composition','الإنشاء',savedDetail?.composition ?? '',20)}
+                        </div>
+                    </div>
+                    <div id="grade-month-preview" class="mt-3 rounded-xl bg-white border border-indigo-100 p-3 text-center text-xs font-bold text-indigo-800"></div>
+                </div>`;
+            }
+            showGradeModal('تعديل درجة الطالب', 'fa-pen-to-square', `<div class="space-y-3"><div class="rounded-2xl bg-slate-50 border border-slate-100 p-3"><p class="text-sm font-black text-slate-800">${escapeHtml(student.name)}</p><p class="text-[10px] text-slate-500 mt-1">${escapeHtml(student.class || '')} • شعبة ${escapeHtml(student.section || '—')} • ${escapeHtml(subject === 'all' ? 'المادة غير محددة' : subject)}</p></div>${fields}<p class="text-[9px] text-slate-400 leading-relaxed">تُحفظ التعديلات في هذا المتصفح. نصف السنة والامتحان النهائي يُدخل كل منهما من 100.</p></div>`);
+            if (period !== 'midyear' && period !== 'finalExam') updateGradeMonthPreview();
+            else {
+                const input = document.getElementById(period === 'midyear' ? 'grade-entry-direct100' : 'grade-entry-final100');
+                if (input) input.setAttribute('inputmode', 'decimal');
+            }
+        }
+
+        function saveGradeModal() {
+            if (!currentGradeEditContext) return;
+            const student = appState.students.find(item => String(item.id) === currentGradeEditContext.studentId);
+            if (!student) { showToast('لم يتم العثور على الطالب', 'error'); return; }
+            const { subject, period } = currentGradeEditContext;
+            const record = getStudentGradeRecord(student, subject, true);
+            if (period === 'midyear') {
+                const value = getGradeInputNumber('grade-entry-direct100', 100);
+                record.midyearMode = 'direct';
+                record.midyearDirect = value === null ? '' : value;
+            } else if (period === 'finalExam') {
+                const value = getGradeInputNumber('grade-entry-final100', 100);
+                record.finalExam = value === null ? '' : value;
+            } else {
+                const match = period.match(/^(term1|term2)Month([123])$/);
+                if (!match) return;
+                const key = `${match[1]}Month${match[2]}`;
+                if (!record.monthDetails || typeof record.monthDetails !== 'object') record.monthDetails = {};
+                const configs = [['attendance',10,'grade-comp-attendance'],['activity',5,'grade-comp-activity'],['behavior',5,'grade-comp-behavior'],['grammar',30,'grade-comp-grammar'],['literature',30,'grade-comp-literature'],['composition',20,'grade-comp-composition']];
+                const detail = { mode: 'components' };
+                const values = {};
+                for (const [field,max,id] of configs) {
+                    const value = getGradeInputNumber(id, max);
+                    if (value === null) { showToast('أكمل جميع مكونات الدرجة التفصيلية قبل الحفظ', 'error'); return; }
+                    values[field] = value;
+                }
+                Object.assign(detail, values);
+                const total = Object.values(values).reduce((sum, value) => sum + value, 0);
+                record.monthDetails[key] = detail;
+                record[key] = Math.max(0, Math.min(100, total));
+            }
             persistLocalState();
+            closeModal();
+            updateStatsBar();
             renderGradesContent();
-            showToast(prefix === 'term1' ? 'تم حفظ تفاصيل الشهر في الفصل الأول' : 'تم حفظ تفاصيل الشهر في الفصل الثاني');
+            showToast('تم حفظ الدرجة وحساب المجاميع تلقائياً');
         }
 
-        function saveTerm1Grades() {
-            saveMonthlyTermGrades('term1', getGradeFilteredStudents());
+        function openGradeDetailsModal(studentId) {
+            const student = appState.students.find(item => String(item.id) === String(studentId));
+            if (!student) { showToast('لم يتم العثور على الطالب', 'error'); return; }
+            const subject = getDefaultStudentGradeSubject(student);
+            const record = getStudentGradeRecord(student, subject, false);
+            const monthCell = (prefix, n) => {
+                const value = getMonthlyMark(record, prefix, n);
+                return `<td class="border border-slate-200 p-2 text-center font-bold">${value === null ? '—' : `${gradeDisplay(value)} /100`}</td>`;
+            };
+            const annual = getAnnualWorkMark(student, subject), final = getFinalResultMark(student, subject);
+            const details = `<div class="space-y-3"><div class="rounded-2xl bg-slate-50 p-3 border border-slate-100"><p class="text-sm font-black text-slate-800">${escapeHtml(student.name)}</p><p class="text-[10px] text-slate-500 mt-1">${escapeHtml(student.class || '')} • شعبة ${escapeHtml(student.section || '—')} • ${escapeHtml(subject === 'all' ? 'المادة غير محددة' : subject)}</p></div>
+                <div class="overflow-x-auto rounded-xl"><table class="w-full text-[10px] border-collapse"><thead><tr class="bg-slate-900 text-amber-300"><th class="p-2">الفترة</th><th class="p-2">الشهر الأول</th><th class="p-2">الشهر الثاني</th><th class="p-2">الشهر الثالث</th><th class="p-2">المعدل</th></tr></thead><tbody>
+                    <tr><td class="border border-slate-200 p-2 font-bold">الفصل الأول</td>${monthCell('term1',1)}${monthCell('term1',2)}${monthCell('term1',3)}<td class="border border-slate-200 p-2 text-center font-black text-indigo-700">${gradeDisplay(getTerm1Mark(student,subject))}</td></tr>
+                    <tr><td class="border border-slate-200 p-2 font-bold">الفصل الثاني</td>${monthCell('term2',1)}${monthCell('term2',2)}${monthCell('term2',3)}<td class="border border-slate-200 p-2 text-center font-black text-sky-700">${gradeDisplay(getTerm2Mark(student,subject))}</td></tr>
+                </tbody></table></div>
+                <div class="grid grid-cols-2 gap-2">${gradeMetric('نصف السنة',getMidyearMark(student,subject),'sky')}${gradeMetric('السعي السنوي',annual,'amber')}${gradeMetric('الامتحان النهائي',gradeNumber(record.finalExam),'violet')}${gradeMetric('النتيجة النهائية',final,'emerald')}</div>
+                <p class="text-[9px] text-slate-400 leading-relaxed">يُحتسب معدل كل فصل عند اكتمال الأشهر المطلوبة (${isThirdMonthRequired() ? 'الثلاثة' : 'الأول والثاني'}). السعي السنوي = (الفصل الأول + نصف السنة + الفصل الثاني) ÷ 3، والنتيجة النهائية = (السعي السنوي + الامتحان النهائي) ÷ 2.</p></div>`;
+            currentModalType = 'grade_details';
+            showGradeModal('تفاصيل درجات الطالب', 'fa-rectangle-list', details, false);
         }
 
-        function saveMidyearGrades() {
-            getGradeFilteredStudents().forEach(student => {
-                const record = getStudentGradeRecord(student);
-                const readValue = (id, max) => {
-                    const input = document.getElementById(id);
-                    return !input || input.value === '' ? '' : Math.min(max, Math.max(0, Number(input.value) || 0));
-                };
-                record.midyearWritten = readValue(`grade-mid-written-${student.id}`, 80);
-                record.midyearOral = readValue(`grade-mid-oral-${student.id}`, 20);
-                record.midyearMode = 'components';
-                // Clearing both component fields also clears the legacy direct mark for this student.
-                if (record.midyearWritten === '' && record.midyearOral === '') record.midyearDirect = '';
-                else record.midyearDirect = '';
+        function openGradesReports() {
+            switchTab(6);
+            if (typeof switchReportCategory === 'function') switchReportCategory('grades');
+        }
+
+        function exportGradesCSV() {
+            const students = getGradeFilteredStudents();
+            const headers = ['اسم الطالب','الصف','الشعبة','نوع الدراسة','المادة','الفصل الأول - شهر 1','الفصل الأول - شهر 2','الفصل الأول - شهر 3','معدل الفصل الأول','نصف السنة','الفصل الثاني - شهر 1','الفصل الثاني - شهر 2','الفصل الثاني - شهر 3','معدل الفصل الثاني','السعي السنوي','الامتحان النهائي','النتيجة النهائية','الحالة'];
+            const rows = students.map(student => {
+                const subject = getDefaultStudentGradeSubject(student);
+                const record = getStudentGradeRecord(student, subject, false);
+                const t1 = getTerm1Mark(student, subject), mid = getMidyearMark(student, subject), t2 = getTerm2Mark(student, subject);
+                const annual = getAnnualWorkMark(student, subject), result = getFinalResultMark(student, subject);
+                return [student.name,student.class,student.section,student.studyType,subject === 'all' ? (student.subject || '') : subject,t1 === null ? '' : gradeDisplay(t1),mid === null ? '' : gradeDisplay(mid),t2 === null ? '' : gradeDisplay(t2),annual === null ? '' : gradeDisplay(annual),gradeNumber(record.finalExam) === null ? '' : gradeDisplay(record.finalExam),result === null ? '' : gradeDisplay(result),result === null ? 'غير مكتمل' : result >= 50 ? 'ناجح' : 'راسب'];
             });
-            persistLocalState(); renderGradesContent(); showToast('تم حفظ درجات نصف السنة التحريري والشفوي');
-        }
-
-        function saveTerm2Grades() {
-            saveMonthlyTermGrades('term2', getGradeFilteredStudents());
-        }
-        function saveFinalGrades() {
-            getGradeFilteredStudents().forEach(s => { const g = getStudentGradeRecord(s); const input = document.getElementById(`grade-final-${s.id}`); if (input) g.finalExam = input.value === '' ? '' : Math.min(100, Math.max(0, Number(input.value) || 0)); });
-            persistLocalState(); renderGradesContent(); showToast('تم حفظ درجات الامتحان النهائي');
+            const quote = value => `"${String(value == null ? '' : value).replace(/"/g, '""')}"`;
+            const csv = '\ufeff' + [headers, ...rows].map(row => row.map(quote).join(',')).join('\r\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const anchor = document.createElement('a');
+            anchor.href = url;
+            anchor.download = `grades_report_${new Date().toISOString().slice(0,10)}.csv`;
+            document.body.appendChild(anchor); anchor.click(); anchor.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            showToast(`تم تصدير درجات ${rows.length} طالباً إلى CSV`);
         }
 
         // --- Subject-aware report filters (used by all report categories) ---
@@ -2426,18 +2503,11 @@
                     <div id="rep-section-grades" class="space-y-2 hidden">
                         <div class="bg-emerald-500/10 border border-emerald-500/20 p-2.5 rounded-2xl mb-3 flex items-center gap-2">
                             <i class="fa-solid fa-square-poll-vertical text-emerald-600 text-base"></i>
-                            <p class="text-[10px] font-bold text-slate-700">نتائج الفصول، السعي السنوي، والنهائي</p>
-                        </div>
-                        <div onclick="switchTab(5)" class="bg-white rounded-2xl p-3 shadow-xs border border-emerald-200 hover:border-emerald-400 transition-all cursor-pointer flex items-center justify-between group">
-                            <div class="flex items-center gap-3">
-                                <div class="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 border border-slate-100 flex items-center justify-center text-base group-hover:scale-105 transition-transform"><i class="fa-solid fa-pen-to-square"></i></div>
-                                <div><h4 class="font-bold text-xs text-slate-800">إدخال وإدارة الدرجات</h4><p class="text-[10px] text-slate-400 font-medium">تبويبات الفصلين ونصف السنة والسعي والنهائي والنتيجة مع تفاصيل درجة كل شهر</p></div>
-                            </div>
-                            <i class="fa-solid fa-chevron-left text-xs text-slate-300 group-hover:text-slate-600"></i>
+                            <p class="text-[10px] font-bold text-slate-700">نتائج الفصول، السعي النصفي، والنهائي</p>
                         </div>
 
-                        ${renderReportButton('grades_by_section', 'درجات الصف والشعبة كاملة', 'طباعة معدلات الفصلين ونصف السنة والسعي السنوي والامتحان النهائي والنتيجة للشعبة', 'fa-list-ol', 'bg-emerald-50 text-emerald-600')}
-                        ${renderReportButton('grades_term_specific', 'درجات الفصل المحدد', 'طباعة معدل فصل أو نصف السنة أو السعي السنوي أو النهائي حسب الصف والشعبة والدراسة', 'fa-file-signature', 'bg-amber-50 text-amber-700')}
+                        ${renderReportButton('grades_by_section', 'درجات الصف والشعبة كاملة', 'طباعة درجات الفصلين ونصف السنة والسعي السنوي والامتحان النهائي والنتيجة للشعبة', 'fa-list-ol', 'bg-emerald-50 text-emerald-600')}
+                        ${renderReportButton('grades_term_specific', 'درجات الفصل المحدد', 'طباعة درجة فصل معين (الأول، الثاني، السعي، أو النهائي) فقط حسب الصف والشعبة والدراسة', 'fa-file-signature', 'bg-amber-50 text-amber-700')}
                         ${renderReportButton('grades_passed', 'الطلبة الناجحون', 'قوائم الطلبة الحاصلين على درجة 50 فأعلى', 'fa-circle-check', 'bg-emerald-100 text-emerald-800')}
                         ${renderReportButton('grades_failed', 'الطلبة الراسبون', 'قوائم الطلبة الراسبين في المادة/السعي', 'fa-circle-xmark', 'bg-rose-100 text-rose-800')}
                         ${renderReportButton('grades_min_max', 'أعلى وأدنى الدرجات', 'إحصائيات أعلى وأقل درجة ومتفوقي الدفعة', 'fa-chart-line', 'bg-amber-50 text-amber-600')}
@@ -3218,7 +3288,7 @@
             setPrintHeaderStageLabelUnified('rep-term-stage', classFilterVal);
             const theadEl = document.getElementById('rep-term-thead');
             const headers = {
-                t1: ['معدل الفصل الأول /100'], midyear: ['نصف السنة /100'], t2: ['معدل الفصل الثاني /100'],
+                t1: ['الفصل الأول /100'], midyear: ['نصف السنة /100'], t2: ['الفصل الثاني /100'],
                 annual: ['السعي السنوي /100'], final: ['الامتحان النهائي /100'], result: ['النتيجة /100', 'الحالة']
             };
             const extraHeaders = headers[termType] || headers.result;
@@ -3390,8 +3460,11 @@
             filtered = sortStudentsAlphabetically(filterStudentsForReportSubject(filtered));
             const rows = filtered.map((student, index) => {
                 const t1 = getTerm1Mark(student), mid = getMidyearMark(student), t2 = getTerm2Mark(student), annual = getAnnualWorkMark(student);
-                const finalExam = gradeNumber(getStudentGradeRecord(student).finalExam) || 0, result = getFinalResultMark(student), passed = result >= 50;
-                return `<tr class="border-b border-slate-100 text-[10px]"><td class="p-1.5 text-center font-bold">${index + 1}</td><td class="p-1.5 font-bold text-slate-800">${escapeHtml(student.name)}</td><td class="p-1.5 text-center text-indigo-700">${gradeDisplay(t1)}</td><td class="p-1.5 text-center text-violet-700">${gradeDisplay(mid)}</td><td class="p-1.5 text-center text-sky-700">${gradeDisplay(t2)}</td><td class="p-1.5 text-center text-amber-700">${gradeDisplay(annual)}</td><td class="p-1.5 text-center text-purple-700">${gradeDisplay(finalExam)}</td><td class="p-1.5 text-center font-black ${passed ? 'text-emerald-700' : 'text-rose-700'}">${gradeDisplay(result)}</td><td class="p-1.5 text-center"><span class="px-2 py-0.5 rounded-full font-black text-[9px] ${passed ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}">${passed ? 'ناجح' : 'راسب'}</span></td></tr>`;
+                const finalMark = gradeNumber(getStudentGradeRecord(student).finalExam), result = getFinalResultMark(student), passed = result !== null && result >= 50, incomplete = result === null;
+                const statusText = incomplete ? 'غير مكتمل' : passed ? 'ناجح' : 'راسب';
+                const statusClass = incomplete ? 'bg-slate-100 text-slate-600' : passed ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800';
+                const resultClass = incomplete ? 'text-slate-500' : passed ? 'text-emerald-700' : 'text-rose-700';
+                return `<tr class="border-b border-slate-100 text-[10px]"><td class="p-1.5 text-center font-bold">${index + 1}</td><td class="p-1.5 font-bold text-slate-800">${escapeHtml(student.name)}</td><td class="p-1.5 text-center text-indigo-700">${gradeDisplay(t1)}</td><td class="p-1.5 text-center text-violet-700">${gradeDisplay(mid)}</td><td class="p-1.5 text-center text-sky-700">${gradeDisplay(t2)}</td><td class="p-1.5 text-center text-amber-700">${gradeDisplay(annual)}</td><td class="p-1.5 text-center text-purple-700">${gradeDisplay(finalMark)}</td><td class="p-1.5 text-center font-black ${resultClass}">${gradeDisplay(result)}</td><td class="p-1.5 text-center"><span class="px-2 py-0.5 rounded-full font-black text-[9px] ${statusClass}">${statusText}</span></td></tr>`;
             }).join('');
             const tableHead = document.querySelector('#grades-sec-report-body')?.parentElement?.querySelector('thead tr');
             if (tableHead) tableHead.innerHTML = '<th class="p-1.5 text-center">#</th><th class="p-1.5">اسم الطالب</th><th>الفصل الأول</th><th>نصف السنة</th><th>الفصل الثاني</th><th>السعي السنوي</th><th>النهائي</th><th>النتيجة</th><th>الحالة</th>';
@@ -3427,7 +3500,7 @@
                 t2: getTerm2Mark(student),
                 annual: getAnnualWorkMark(student),
                 total: getFinalResultMark(student)
-            })).sort((a, b) => b.total - a.total || String(a.student.name || '').localeCompare(String(b.student.name || ''), 'ar'));
+            })).filter(item => item.total !== null && item.total !== undefined).sort((a, b) => b.total - a.total || String(a.student.name || '').localeCompare(String(b.student.name || ''), 'ar'));
 
             const highest = totals[0];
             const lowest = totals.length ? totals[totals.length - 1] : null;
@@ -3461,7 +3534,7 @@
             const searchKey = getSearchKeyword();
             let passed = appState.students.filter(s => {
                 let tot = getFinalResultMark(s);
-                return tot >= 50 && (!searchKey || s.name.toLowerCase().includes(searchKey));
+                return tot !== null && tot !== undefined && tot >= 50 && (!searchKey || s.name.toLowerCase().includes(searchKey));
             });
             passed = filterStudentsForReportSubject(passed);
             passed = sortStudentsAlphabetically(passed);
@@ -3486,7 +3559,7 @@
             const searchKey = getSearchKeyword();
             let failed = appState.students.filter(s => {
                 let tot = getFinalResultMark(s);
-                return tot < 50 && (!searchKey || s.name.toLowerCase().includes(searchKey));
+                return tot !== null && tot !== undefined && tot < 50 && (!searchKey || s.name.toLowerCase().includes(searchKey));
             });
             failed = filterStudentsForReportSubject(failed);
             failed = sortStudentsAlphabetically(failed);
@@ -4568,7 +4641,7 @@
 
         function closeModal() {
             const modalSubmit = document.getElementById('modal-submit-btn');
-            if (modalSubmit) modalSubmit.style.display = '';
+            if (modalSubmit) { modalSubmit.style.display = ''; const submitText = modalSubmit.querySelector('span'); if (submitText) submitText.innerText = 'تأكيد الحفظ'; }
             const modal = document.getElementById('action-modal');
             const box = document.getElementById('modal-box');
             modal.classList.add('opacity-0', 'pointer-events-none');
@@ -4578,6 +4651,7 @@
         }
 
         function handleModalSubmit() {
+            if (currentModalType === 'grade_edit') { saveGradeModal(); return; }
             if (currentModalType === 'add_class') {
                 const name = document.getElementById('inp-class-name').value.trim();
                 const section = document.getElementById('inp-class-section').value.trim();
@@ -4608,7 +4682,7 @@
                     whatsapp: String((document.getElementById('inp-std-whatsapp') || {}).value || '').trim(),
                     behavior: "جديد",
                     note: "طالب مسجل حديثًا",
-                    term1Month1: "", term1Month2: "", term1Month3: "",
+                    term1Month1: "", term1Month2: "", term1Month3: "", monthDetails: {},
                     midyearMode: "direct", midyearDirect: "", midyearWritten: "", midyearOral: "", midyearMonth1: "", midyearMonth2: "",
                     term2Month1: "", term2Month2: "", term2Month3: "", finalExam: "",
                     attendanceCount: 0, 
@@ -4699,7 +4773,7 @@
                         year: appState.schoolInfo.year,
                         behavior: "مميز",
                         note: "مستورد",
-                        term1Month1: "", term1Month2: "", term1Month3: "",
+                        term1Month1: "", term1Month2: "", term1Month3: "", monthDetails: {},
                         midyearMode: "direct", midyearDirect: "", midyearWritten: "", midyearOral: "", midyearMonth1: "", midyearMonth2: "",
                         term2Month1: "", term2Month2: "", term2Month3: "", finalExam: "",
                         attendanceCount: 0, absenceCount: 0, excusedCount: 0,
