@@ -54,6 +54,22 @@
             background: #cbd5e1;
             border-radius: 10px;
         }
+        /* Keep score cells clean: hide the browser's up/down number arrows. */
+        .grade-entry-table input[type="number"] {
+            -moz-appearance: textfield;
+            appearance: textfield;
+        }
+        .grade-entry-table input[type="number"]::-webkit-inner-spin-button,
+        .grade-entry-table input[type="number"]::-webkit-outer-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        .grade-field-label {
+            display: block;
+            line-height: 1.2;
+            white-space: nowrap;
+        }
+        .calendar-day-btn { min-height: 38px; }
         
         /* Official Professional Printable Sheet Styling */
         @media print {
@@ -197,6 +213,90 @@
         .print-body-title-block {
             display: none;
         }
+
+        /* Excel-like grade entry grid: aligned cells with borderless in-cell editing. */
+        .grade-entry-table {
+            border-collapse: separate !important;
+            border-spacing: 0 !important;
+            background: #ffffff;
+            table-layout: auto;
+        }
+        .grade-entry-table th,
+        .grade-entry-table td {
+            border: 1px solid #cbd5e1 !important;
+            vertical-align: middle;
+        }
+        .grade-entry-table th {
+            text-align: center;
+            font-weight: 800;
+            position: sticky;
+            top: 0;
+            z-index: 2;
+        }
+        /* Keep the row number and student name visible while scrolling horizontally. */
+        .grade-entry-table th.grade-number-sticky,
+        .grade-entry-table td.grade-number-sticky {
+            position: sticky;
+            right: 0;
+            width: 36px;
+            min-width: 36px;
+            max-width: 36px;
+            box-sizing: border-box;
+        }
+        .grade-entry-table th.grade-student-sticky,
+        .grade-entry-table td.grade-student-sticky {
+            position: sticky;
+            right: 36px;
+            min-width: 142px;
+            max-width: 170px;
+            box-sizing: border-box;
+            box-shadow: -2px 0 3px rgba(15, 23, 42, 0.08);
+        }
+        .grade-entry-table th.grade-number-sticky,
+        .grade-entry-table th.grade-student-sticky {
+            z-index: 5;
+            background: #0f172a;
+        }
+        .grade-entry-table td.grade-number-sticky,
+        .grade-entry-table td.grade-student-sticky {
+            z-index: 3;
+            background: #ffffff;
+        }
+        .grade-entry-table tbody tr:nth-child(even) { background-color: #f8fafc; }
+        .grade-entry-table tbody tr:nth-child(even) td.grade-number-sticky,
+        .grade-entry-table tbody tr:nth-child(even) td.grade-student-sticky { background-color: #f8fafc; }
+        .grade-entry-table tbody tr:hover { background-color: #eef2ff; }
+        .grade-entry-table tbody tr:hover td.grade-number-sticky,
+        .grade-entry-table tbody tr:hover td.grade-student-sticky { background-color: #eef2ff; }
+        .grade-entry-table td.grade-data-cell { padding: 0 !important; }
+        .grade-entry-table .grade-cell-input,
+        .grade-entry-table input[type="number"],
+        .grade-entry-table select {
+            display: block;
+            width: 100% !important;
+            min-width: 48px;
+            min-height: 35px;
+            box-sizing: border-box;
+            padding: 7px 3px !important;
+            margin: 0;
+            border: 0 !important;
+            border-radius: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            outline: none;
+            text-align: center;
+            font-variant-numeric: tabular-nums;
+        }
+        .grade-entry-table .grade-cell-input:focus,
+        .grade-entry-table input[type="number"]:focus,
+        .grade-entry-table select:focus {
+            outline: 2px solid #6366f1 !important;
+            outline-offset: -2px;
+            background: #eef2ff !important;
+            position: relative;
+            z-index: 1;
+        }
+        .grade-entry-table select { cursor: pointer; }
     </style>
 </head>
 <body class="flex items-center justify-center min-h-screen m-0 p-0 sm:py-6 bg-slate-950">
@@ -307,6 +407,13 @@
                     <i class="fa-solid fa-chart-pie text-xs sm:text-sm"></i>
                 </div>
                 <span class="text-[8px] sm:text-[9px] font-bold mt-0.5 truncate w-full text-center transition-colors">التقارير</span>
+            </button>
+
+            <button onclick="switchTab(7)" id="tab-7" class="flex flex-col items-center flex-1 py-1 transition-all group">
+                <div class="tab-icon-box w-8 h-8 sm:w-9 sm:h-9 rounded-2xl flex items-center justify-center transition-all duration-300">
+                    <i class="fa-solid fa-note-sticky text-xs sm:text-sm"></i>
+                </div>
+                <span class="text-[8px] sm:text-[9px] font-bold mt-0.5 truncate w-full text-center transition-colors">الملاحظات</span>
             </button>
         </div>
     </div>
@@ -507,6 +614,7 @@
                 }
             ],
             subjectCatalog: [],
+            gradeMonth3Settings: {},
             subjects: [
                 { id: 1, name: "برمجة الحاسوب I", class: "الصف الأول", teacher: "أ.د. حيدر الموسوي" },
                 { id: 2, name: "تراكيب البيانات", class: "الصف الثاني", teacher: "أ.د. حيدر الموسوي" },
@@ -537,6 +645,12 @@
 
         let activeTabIndex = 1;
         let activeGradesSubTab = 0;
+        let activeGradeMonth = 1;
+        let activeNotesView = 'home';
+        let activeMemoId = null;
+        let activeReminderId = null;
+        let selectedCalendarDate = getLocalDateKey(new Date());
+        let calendarCursor = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
         let currentModalType = "";
         let currentAttendanceMap = {};
         let currentLoadedAttendanceStudents = [];
@@ -564,10 +678,29 @@
             appState.students = Array.isArray(appState.students) ? appState.students : [];
             appState.subjects = Array.isArray(appState.subjects) ? appState.subjects : [];
             appState.subjectCatalog = Array.isArray(appState.subjectCatalog) ? appState.subjectCatalog : [];
+            appState.gradeMonth3Settings = appState.gradeMonth3Settings && typeof appState.gradeMonth3Settings === 'object' ? appState.gradeMonth3Settings : {};
             appState.schedule = Array.isArray(appState.schedule) ? appState.schedule : [];
             appState.savedSessions = Array.isArray(appState.savedSessions) ? appState.savedSessions : [];
+            appState.notes = Array.isArray(appState.notes) ? appState.notes : [];
+            // Standardize memo IDs so opening, editing, saving and deleting works with old/imported data too.
+            const usedMemoIds = new Set();
+            appState.notes.forEach((note, index) => {
+                if (!note || typeof note !== 'object') return;
+                let memoId = Number(note.id);
+                if (!Number.isSafeInteger(memoId) || memoId <= 0 || usedMemoIds.has(String(memoId))) {
+                    memoId = Date.now() + index;
+                    while (usedMemoIds.has(String(memoId))) memoId += 1;
+                }
+                note.id = memoId;
+                usedMemoIds.add(String(memoId));
+                note.date = String(note.date || getLocalDateKey(new Date()));
+                note.title = String(note.title || 'ملاحظة بدون عنوان');
+                note.content = String(note.content || '');
+                if (!Number.isFinite(Number(note.createdAt))) note.createdAt = Date.now();
+                if (!Number.isFinite(Number(note.updatedAt))) note.updatedAt = Number(note.createdAt);
+            });
+            appState.calendarReminders = Array.isArray(appState.calendarReminders) ? appState.calendarReminders : [];
             appState.attendanceRecord = appState.attendanceRecord && typeof appState.attendanceRecord === 'object' ? appState.attendanceRecord : {};
-            appState.gradesSettings = { includeMonth3: false, ...(appState.gradesSettings || {}) };
             appState.classes.forEach(cls => { cls.name = convertSchoolTerm(cls.name); });
             appState.students.forEach(student => {
                 student.class = convertSchoolTerm(student.class);
@@ -586,12 +719,9 @@
                 }
                 if (student.term2Month2 === undefined) student.term2Month2 = "";
                 if (student.term2Month3 === undefined) student.term2Month3 = "";
-                if (student.midyearMode === undefined) student.midyearMode = "direct";
                 if (student.midyearDirect === undefined) student.midyearDirect = "";
-                if (student.midyearWritten === undefined) student.midyearWritten = "";
-                if (student.midyearOral === undefined) student.midyearOral = "";
-                if (student.midyearMonth1 === undefined) student.midyearMonth1 = "";
-                if (student.midyearMonth2 === undefined) student.midyearMonth2 = "";
+                migrateHalfYearToSingleMark(student);
+                Object.values(student.gradesBySubject).forEach(migrateHalfYearToSingleMark);
                 if (student.finalExam === undefined) student.finalExam = student.final ? Math.min(100, Number(student.final) * 2) : "";
                 delete student.t1Exam; delete student.t1Eval; delete student.t2Exam; delete student.t2Eval; delete student.final;
                 if (student.id !== undefined && student.id !== null) student.id = typeof student.id === 'string' && student.id.trim() !== '' ? (Number.isFinite(Number(student.id)) ? Number(student.id) : student.id) : student.id;
@@ -997,6 +1127,8 @@
             appState.schedule = [];
             appState.attendanceRecord = {};
             appState.savedSessions = [];
+            appState.notes = [];
+            appState.calendarReminders = [];
             appState.schoolInfo = { name: 'مدرسة النموذجية', university: '', college: '', department: 'الإدارة', teacher: 'المدرس', subject: '', year: '', logo: '' };
             appState.subjectAssignmentSchemaVersion = 2;
             persistLocalState();
@@ -1062,6 +1194,13 @@
                 subtitle: "تقارير الطلبة، تقارير الحضور والغياب، وتقارير الدرجات والنتائج",
                 icon: "fa-chart-pie",
                 isReports: true
+            },
+            {
+                index: 7,
+                title: "الملاحظات والتقويم",
+                subtitle: "مذكرة يومية وتقويم للمواعيد والتنبيهات",
+                icon: "fa-note-sticky",
+                isNotesTab: true
             }
         ];
 
@@ -1083,7 +1222,7 @@
 
             updateStatsBar();
 
-            for (let i = 0; i < 7; i++) {
+            for (let i = 0; i < 8; i++) {
                 const btn = document.getElementById(`tab-${i}`);
                 if (!btn) continue;
                 const iconBox = btn.querySelector('.tab-icon-box');
@@ -1148,6 +1287,8 @@
                 renderGradesTab(container);
             } else if (data.isReports) {
                 renderReportsTab(container);
+            } else if (data.isNotesTab) {
+                renderNotesTab(container);
             } else {
                 renderCardsTab(container, data.cards);
             }
@@ -1747,8 +1888,15 @@
             showToast("جاري تحميل بيانات الجلسة للتعديل...");
         }
 
-        // --- 6. SCHOOL GRADES: modern student cards, mobile editing, complete-term calculations ---
-        let currentGradeEditContext = null;
+        // --- 6. SCHOOL GRADES: monthly component marks, midyear, annual work, final exam and result ---
+        const MONTHLY_GRADE_COMPONENTS = [
+            { key: 'Attendance', label: 'الحضور', max: 10 },
+            { key: 'Activity', label: 'النشاط', max: 5 },
+            { key: 'Behavior', label: 'السلوك', max: 5 },
+            { key: 'Grammar', label: 'القواعد', max: 30 },
+            { key: 'Literature', label: 'الأدب', max: 30 },
+            { key: 'Composition', label: 'الإنشاء', max: 20 }
+        ];
 
         function gradeNumber(value) {
             if (value === '' || value === null || value === undefined) return null;
@@ -1756,44 +1904,201 @@
             return Number.isFinite(number) ? number : null;
         }
 
-        function getGradeSubjectContext() {
-            if (currentModalType === 'report_view') return (document.getElementById('rep-subject-filter') || {}).value || 'all';
+        function gradeRecordHasData(record) {
+            if (!record || typeof record !== 'object') return false;
+            const keys = ['term1Month1','term1Month2','term1Month3','term2Month1','term2Month2','term2Month3','midyearDirect','finalExam'];
+            for (const prefix of ['term1', 'term2']) {
+                for (let month = 1; month <= 3; month++) {
+                    MONTHLY_GRADE_COMPONENTS.forEach(component => keys.push(`${prefix}Month${month}${component.key}`));
+                }
+            }
+            return keys.some(key => record[key] !== '' && record[key] !== null && record[key] !== undefined && Number.isFinite(Number(record[key])));
+        }
+
+        function migrateHalfYearToSingleMark(record) {
+            if (!record || typeof record !== 'object') return;
+            const direct = record.midyearDirect;
+            const directMissing = direct === '' || direct === null || direct === undefined || !Number.isFinite(Number(direct));
+            if (directMissing) {
+                const written = record.midyearWritten;
+                const oral = record.midyearOral;
+                const writtenEntered = written !== '' && written !== null && written !== undefined && Number.isFinite(Number(written));
+                const oralEntered = oral !== '' && oral !== null && oral !== undefined && Number.isFinite(Number(oral));
+                if (writtenEntered && oralEntered) {
+                    record.midyearDirect = Math.min(100, Math.max(0, Math.trunc(Number(written) + Number(oral))));
+                } else {
+                    record.midyearDirect = '';
+                }
+            } else {
+                record.midyearDirect = Math.min(100, Math.max(0, Math.trunc(Number(direct))));
+            }
+            record.midyearMode = 'direct';
+            delete record.midyearWritten;
+            delete record.midyearOral;
+            delete record.midyearMonth1;
+            delete record.midyearMonth2;
+        }
+
+        function getGradeSubjectContext(student = null) {
             const gradeSelect = document.getElementById('grd-subject-select');
-            if (gradeSelect) return gradeSelect.value || 'all';
-            return getSelectedReportSubject();
+            const reportSelect = document.getElementById('rep-subject-filter');
+            if (currentModalType === 'report_view') {
+                const selected = reportSelect ? (reportSelect.value || 'all') : 'all';
+                if (selected !== 'all') return selected;
+            } else if (gradeSelect) {
+                const selected = gradeSelect.value || 'all';
+                if (selected !== 'all') return selected;
+            } else {
+                return getSelectedReportSubject();
+            }
+
+            // With "all subjects", use the student's saved subject-specific record when it has data;
+            // otherwise use the legacy/general student record. This keeps entry tables and reports aligned.
+            const primarySubject = String(student && student.subject || '').trim();
+            const subjectRecord = primarySubject && student && student.gradesBySubject ? student.gradesBySubject[primarySubject] : null;
+            if (subjectRecord && gradeRecordHasData(subjectRecord)) return primarySubject;
+            return 'all';
         }
 
         function createEmptyGradeRecord() {
-            return {
+            const record = {
                 term1Month1: '', term1Month2: '', term1Month3: '',
-                term2Month1: '', term2Month2: '', term2Month3: '',
-                midyearMode: 'direct', midyearDirect: '', midyearWritten: '', midyearOral: '', midyearMonth1: '', midyearMonth2: '',
-                finalExam: '', monthDetails: {}
+                midyearDirect: '',
+                term2Month1: '', term2Month2: '', term2Month3: '', finalExam: ''
             };
+            ['term1', 'term2'].forEach(prefix => {
+                [1, 2, 3].forEach(month => MONTHLY_GRADE_COMPONENTS.forEach(component => {
+                    record[`${prefix}Month${month}${component.key}`] = '';
+                }));
+            });
+            return record;
         }
 
-        function getStudentGradeRecord(student, subjectName = getGradeSubjectContext(), create = true) {
+        function getStudentGradeRecord(student, subjectName = null, create = true) {
             if (!student) return createEmptyGradeRecord();
+            if (subjectName === null || subjectName === undefined) subjectName = getGradeSubjectContext(student);
             const subject = String(subjectName || 'all').trim();
-            if (!subject || subject === 'all') {
-                const ownSubject = String(student.subject || '').trim();
-                if (ownSubject && student.gradesBySubject && student.gradesBySubject[ownSubject]) {
-                    const ownRecord = student.gradesBySubject[ownSubject];
-                    if (!ownRecord.monthDetails || typeof ownRecord.monthDetails !== 'object') ownRecord.monthDetails = {};
-                    return ownRecord;
-                }
-                if (!student.monthDetails || typeof student.monthDetails !== 'object') student.monthDetails = {};
-                return student;
-            }
-            if (normalizeAcademicText(student.subject) === normalizeAcademicText(subject) && !student.gradesBySubject?.[subject]) {
-                if (!student.monthDetails || typeof student.monthDetails !== 'object') student.monthDetails = {};
-                return student;
-            }
+            if (!subject || subject === 'all') return student;
+            if (normalizeAcademicText(student.subject) === normalizeAcademicText(subject) && !student.gradesBySubject?.[subject]) return student;
             if (!student.gradesBySubject || typeof student.gradesBySubject !== 'object') student.gradesBySubject = {};
             if (!student.gradesBySubject[subject] && create) student.gradesBySubject[subject] = createEmptyGradeRecord();
-            const record = student.gradesBySubject[subject] || createEmptyGradeRecord();
-            if (!record.monthDetails || typeof record.monthDetails !== 'object') record.monthDetails = {};
-            return record;
+            return student.gradesBySubject[subject] || createEmptyGradeRecord();
+        }
+
+        function gradeMonth3SettingsKey(subjectName = getGradeSubjectContext()) {
+            const subject = String(subjectName || 'all').trim() || 'all';
+            return subject === 'all' ? 'all' : normalizeAcademicText(subject);
+        }
+
+        function isGradeMonth3Enabled(prefix, subjectName = getGradeSubjectContext()) {
+            const key = gradeMonth3SettingsKey(subjectName);
+            const settings = appState.gradeMonth3Settings || {};
+            if (settings[key] && Object.prototype.hasOwnProperty.call(settings[key], prefix)) return !!settings[key][prefix];
+            if (key !== 'all' && settings.all && Object.prototype.hasOwnProperty.call(settings.all, prefix)) return !!settings.all[prefix];
+            return false;
+        }
+
+        function setGradeMonth3Enabled(prefix, enabled) {
+            const subjectSelect = document.getElementById('grd-subject-select');
+            const subjectName = subjectSelect ? subjectSelect.value || 'all' : getGradeSubjectContext();
+            const key = gradeMonth3SettingsKey(subjectName);
+            if (!appState.gradeMonth3Settings || typeof appState.gradeMonth3Settings !== 'object') appState.gradeMonth3Settings = {};
+            if (!appState.gradeMonth3Settings[key]) appState.gradeMonth3Settings[key] = {};
+            appState.gradeMonth3Settings[key][prefix] = !!enabled;
+            persistLocalState();
+            renderGradesContent();
+            showToast(enabled ? 'تم تفعيل احتساب الشهر الثالث في معدل الفصل' : 'تم إيقاف احتساب الشهر الثالث في معدل الفصل');
+        }
+
+        function getMonthlyBreakdown(record, prefix, month) {
+            const values = MONTHLY_GRADE_COMPONENTS.map(component => gradeNumber(record[`${prefix}Month${month}${component.key}`]));
+            const hasAny = values.some(value => value !== null);
+            const complete = values.every(value => value !== null);
+            const storedTotal = gradeNumber(record[`${prefix}Month${month}`]);
+            // Keep old aggregate scores visible, but don't consider them complete until their components are entered.
+            const total = hasAny ? values.reduce((sum, value) => sum + (value === null ? 0 : value), 0) : storedTotal;
+            return { values, hasAny, complete, total, storedTotal };
+        }
+
+        function getMonthlyAverage(record, prefix, subjectName = getGradeSubjectContext()) {
+            const month1 = getMonthlyBreakdown(record, prefix, 1);
+            const month2 = getMonthlyBreakdown(record, prefix, 2);
+            // The first and second months are required for a term average.
+            if (!month1.complete || !month2.complete) return null;
+            const values = [month1.total, month2.total];
+            if (isGradeMonth3Enabled(prefix, subjectName)) {
+                const month3 = getMonthlyBreakdown(record, prefix, 3);
+                // The optional third month is counted only once its six components are complete.
+                if (month3.complete) values.push(month3.total);
+            }
+            return values.reduce((sum, value) => sum + value, 0) / values.length;
+        }
+
+        function getTerm1Mark(student) {
+            const subjectName = getGradeSubjectContext(student);
+            return getMonthlyAverage(getStudentGradeRecord(student, subjectName, false), 'term1', subjectName);
+        }
+
+        function getTerm2Mark(student) {
+            const subjectName = getGradeSubjectContext(student);
+            return getMonthlyAverage(getStudentGradeRecord(student, subjectName, false), 'term2', subjectName);
+        }
+
+        function getMidyearMark(student) {
+            const record = getStudentGradeRecord(student, getGradeSubjectContext(student), false);
+            return gradeNumber(record.midyearDirect);
+        }
+
+        function getAnnualWorkMark(student) {
+            const term1 = getTerm1Mark(student);
+            const midyear = getMidyearMark(student);
+            const term2 = getTerm2Mark(student);
+            if (term1 === null || midyear === null || term2 === null) return null;
+            return (term1 + midyear + term2) / 3;
+        }
+
+        function getFinalResultMark(student) {
+            const record = getStudentGradeRecord(student, getGradeSubjectContext(student), false);
+            const annual = getAnnualWorkMark(student);
+            const finalExam = gradeNumber(record.finalExam);
+            if (annual === null || finalExam === null) return null;
+            return (annual + finalExam) / 2;
+        }
+
+        function gradeDisplay(value) {
+            if (value === null || value === undefined || value === '') return '—';
+            const n = Number(value);
+            if (!Number.isFinite(n)) return '—';
+            return Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+        }
+
+        function sanitizeGradeInteger(input, maxValue = 100) {
+            if (!input) return;
+            let raw = String(input.value == null ? '' : input.value)
+                .replace(/[٠-٩]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+                .replace(/[۰-۹]/g, digit => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)));
+            if (!raw.trim()) { input.value = ''; return; }
+            if (raw.trim().startsWith('-')) { input.value = '0'; return; }
+            let parsed = Number(raw);
+            if (!Number.isFinite(parsed)) {
+                const cleaned = raw.replace(/[^0-9.]/g, '');
+                parsed = Number.parseFloat(cleaned);
+            }
+            if (!Number.isFinite(parsed)) { input.value = ''; return; }
+            input.value = String(Math.min(maxValue, Math.max(0, Math.trunc(parsed))));
+        }
+
+        function readGradeIntegerInput(input, maxValue = 100) {
+            if (!input || input.value === '') return '';
+            const parsed = Number(input.value);
+            if (!Number.isFinite(parsed)) return '';
+            return Math.min(maxValue, Math.max(0, Math.trunc(parsed)));
+        }
+
+        function gradeInputValue(value, maxValue = 100) {
+            const parsed = gradeNumber(value);
+            if (parsed === null) return '';
+            return Math.min(maxValue, Math.max(0, Math.trunc(parsed)));
         }
 
         function getGradeSubjectOptions() {
@@ -1802,98 +2107,12 @@
             return Array.from(names).filter(Boolean).sort((a, b) => a.localeCompare(b, 'ar'));
         }
 
-        function getDefaultStudentGradeSubject(student) {
-            const selected = (document.getElementById('grd-subject-select') || {}).value || 'all';
-            if (selected !== 'all') return selected;
-            if (student && String(student.subject || '').trim()) return String(student.subject).trim();
-            const linked = appState.subjects.find(subject =>
-                normalizeAcademicText(subject.class) === normalizeAcademicText(student?.class) &&
-                normalizeAcademicText(subject.section) === normalizeAcademicText(student?.section) &&
-                normalizeAcademicText(subject.studyType || 'صباحي') === normalizeAcademicText(student?.studyType || 'صباحي'));
-            return linked ? linked.name : 'all';
-        }
-
-        function isThirdMonthRequired() {
-            return !!(appState.gradesSettings && appState.gradesSettings.includeMonth3);
-        }
-
-        function getMonthlyMark(record, prefix, monthNumber) {
-            if (!record) return null;
-            const key = `${prefix}Month${monthNumber}`;
-            const detail = record.monthDetails && record.monthDetails[key];
-            if (detail) {
-                if (detail.mode === 'components') {
-                    const fields = ['attendance', 'activity', 'behavior', 'grammar', 'literature', 'composition'];
-                    const values = fields.map(field => gradeNumber(detail[field]));
-                    if (values.some(value => value === null)) return null;
-                    return Math.min(100, Math.max(0, values.reduce((sum, value) => sum + value, 0)));
-                }
-                const daily = gradeNumber(detail.daily);
-                const paper = gradeNumber(detail.paper);
-                if (daily === null || paper === null) return null;
-                return Math.min(100, Math.max(0, daily + paper));
-            }
-            return gradeNumber(record[key]);
-        }
-
-        function getMonthlyAverage(record, prefix) {
-            const requiredMonths = isThirdMonthRequired() ? [1, 2, 3] : [1, 2];
-            const values = requiredMonths.map(month => getMonthlyMark(record, prefix, month));
-            // لا يظهر معدل الفصل إلا بعد إدخال جميع الأشهر المطلوبة حسب الإعداد.
-            if (values.some(value => value === null)) return null;
-            return values.reduce((sum, value) => sum + value, 0) / values.length;
-        }
-
-        function getTerm1Mark(student, subjectName = getGradeSubjectContext()) {
-            return getMonthlyAverage(getStudentGradeRecord(student, subjectName, false), 'term1');
-        }
-
-        function getTerm2Mark(student, subjectName = getGradeSubjectContext()) {
-            return getMonthlyAverage(getStudentGradeRecord(student, subjectName, false), 'term2');
-        }
-
-        function getMidyearMark(student, subjectName = getGradeSubjectContext()) {
-            const record = getStudentGradeRecord(student, subjectName, false);
-            if ((record.midyearMode || 'direct') !== 'components') return gradeNumber(record.midyearDirect);
-            const written = gradeNumber(record.midyearWritten);
-            const oral = gradeNumber(record.midyearOral);
-            if (written === null || oral === null) return null;
-            const values = [written + oral];
-            [record.midyearMonth1, record.midyearMonth2].forEach(value => {
-                const parsed = gradeNumber(value);
-                if (parsed !== null) values.push(parsed);
-            });
-            return values.reduce((sum, value) => sum + value, 0) / values.length;
-        }
-
-        function getAnnualWorkMark(student, subjectName = getGradeSubjectContext()) {
-            const first = getTerm1Mark(student, subjectName);
-            const midyear = getMidyearMark(student, subjectName);
-            const second = getTerm2Mark(student, subjectName);
-            if (first === null || midyear === null || second === null) return null;
-            return (first + midyear + second) / 3;
-        }
-
-        function getFinalResultMark(student, subjectName = getGradeSubjectContext()) {
-            const annual = getAnnualWorkMark(student, subjectName);
-            const record = getStudentGradeRecord(student, subjectName, false);
-            const finalExam = gradeNumber(record.finalExam);
-            if (annual === null || finalExam === null) return null;
-            return (annual + finalExam) / 2;
-        }
-
-        function gradeDisplay(value) {
-            if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—';
-            const n = Number(value);
-            return Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
-        }
-
         function updateGradesSectionOptions() {
             const classSelect = document.getElementById('grd-class-select');
             const sectionSelect = document.getElementById('grd-section-select');
             if (!classSelect || !sectionSelect) return;
-            const previous = sectionSelect.value || 'all';
-            const selectedClass = classSelect.value || 'all';
+            const previous = sectionSelect.value;
+            const selectedClass = classSelect.value;
             const sections = new Map();
             appState.classes.filter(cls => selectedClass === 'all' || normalizeAcademicText(cls.name) === normalizeAcademicText(selectedClass))
                 .forEach(cls => {
@@ -1901,58 +2120,74 @@
                     if (!sections.has(value)) sections.set(value, `الشعبة ${cls.section} - ${cls.studyType || 'صباحي'}`);
                 });
             sectionSelect.innerHTML = `<option value="all">جميع الشعب</option>` + Array.from(sections.entries()).map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`).join('');
-            if (previous === 'all' || sections.has(previous)) sectionSelect.value = previous;
+            if (sections.has(previous)) sectionSelect.value = previous;
         }
 
         function renderGradesTab(container) {
-            if (!appState.gradesSettings || typeof appState.gradesSettings !== 'object') appState.gradesSettings = { includeMonth3: false };
             const classes = Array.from(new Set(appState.classes.map(cls => cls.name))).sort((a, b) => a.localeCompare(b, 'ar'));
             const classOptions = classes.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
             const subjects = getGradeSubjectOptions();
             const subjectOptions = subjects.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
-            const periods = [
-                ['term1Month1', 'الشهر الأول - الفصل الأول'], ['term1Month2', 'الشهر الثاني - الفصل الأول'], ['term1Month3', 'الشهر الثالث - الفصل الأول'],
-                ['midyear', 'نصف السنة /100'],
-                ['term2Month1', 'الشهر الأول - الفصل الثاني'], ['term2Month2', 'الشهر الثاني - الفصل الثاني'], ['term2Month3', 'الشهر الثالث - الفصل الثاني'],
-                ['finalExam', 'الامتحان النهائي /100']
-            ];
+            const tabs = ['الفصل الأول', 'نصف السنة', 'الفصل الثاني', 'السعي السنوي', 'الامتحان النهائي', 'النتيجة'];
             container.innerHTML = `
                 <div class="bg-white rounded-3xl p-3.5 shadow-sm border border-slate-200/80 mb-3.5">
-                    <div class="flex items-start justify-between gap-2 mb-3">
-                        <div><h3 class="font-black text-slate-800 text-sm flex items-center gap-1.5"><i class="fa-solid fa-award text-amber-500"></i><span>قائمة الدرجات العصرية</span></h3><p class="text-[10px] text-slate-400 mt-1">بطاقات الطلبة وحساب الدرجات تلقائياً</p></div>
-                        <span class="text-[9px] px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 font-black border border-emerald-100"><i class="fa-solid fa-hard-drive ml-1"></i>حفظ محلي</span>
+                    <h3 class="font-black text-slate-800 text-xs mb-2.5 flex items-center gap-1.5"><i class="fa-solid fa-award text-amber-500"></i><span>سجل الدرجات المدرسية</span></h3>
+                    <div class="grid grid-cols-2 gap-2 mb-3">
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-600 mb-1">الصف:</label>
+                            <select id="grd-class-select" onchange="updateGradesSectionOptions(); renderGradesContent()" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold text-slate-700 outline-none"><option value="all">جميع الصفوف</option>${classOptions}</select>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-600 mb-1">الشعبة:</label>
+                            <select id="grd-section-select" onchange="renderGradesContent()" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold text-slate-700 outline-none"><option value="all">جميع الشعب</option></select>
+                        </div>
+                        <div class="col-span-2">
+                            <label class="block text-[10px] font-bold text-slate-600 mb-1">المادة الدراسية:</label>
+                            <select id="grd-subject-select" onchange="renderGradesContent()" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold text-slate-700 outline-none"><option value="all">جميع المواد</option>${subjectOptions}</select>
+                        </div>
                     </div>
-                    <div class="grid grid-cols-2 gap-2 mb-2.5">
-                        <div><label class="block text-[10px] font-bold text-slate-600 mb-1">الصف</label><select id="grd-class-select" onchange="updateGradesSectionOptions(); renderGradesContent()" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold text-slate-700 outline-none"><option value="all">جميع الصفوف</option>${classOptions}</select></div>
-                        <div><label class="block text-[10px] font-bold text-slate-600 mb-1">الشعبة</label><select id="grd-section-select" onchange="renderGradesContent()" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold text-slate-700 outline-none"><option value="all">جميع الشعب</option></select></div>
-                        <div class="col-span-2"><label class="block text-[10px] font-bold text-slate-600 mb-1">المادة الدراسية</label><select id="grd-subject-select" onchange="renderGradesContent()" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold text-slate-700 outline-none"><option value="all">جميع المواد (حسب مادة الطالب)</option>${subjectOptions}</select></div>
-                        <div class="col-span-2"><label class="block text-[10px] font-bold text-slate-600 mb-1">بحث عن اسم الطالب</label><div class="relative"><i class="fa-solid fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i><input id="grd-search-input" type="search" oninput="renderGradesContent()" placeholder="اكتب اسم الطالب..." class="w-full pr-9 pl-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold outline-none focus:border-indigo-400"></div></div>
-                        <div class="col-span-2"><label class="block text-[10px] font-bold text-slate-600 mb-1">الدرجة الحالية المعروضة</label><select id="grd-period-select" onchange="renderGradesContent()" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold text-slate-700 outline-none">${periods.map(([value,label]) => `<option value="${value}">${label}</option>`).join('')}</select></div>
-                    </div>
-                    <label class="flex items-center gap-2 p-2.5 rounded-xl bg-amber-50 border border-amber-100 text-[10px] font-bold text-amber-900 cursor-pointer"><input id="grd-include-month3" type="checkbox" ${isThirdMonthRequired() ? 'checked' : ''} onchange="setThirdMonthRequired(this.checked)" class="accent-amber-600 w-4 h-4"><span>تفعيل الشهر الثالث ضمن معدل الفصل (يتطلب إدخال الأشهر الثلاثة)</span></label>
-                    <div class="grid grid-cols-2 gap-2 mt-3">
-                        <button onclick="exportGradesCSV()" class="py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black flex justify-center items-center gap-1.5"><i class="fa-solid fa-file-csv"></i>تصدير CSV</button>
-                        <button onclick="openGradesReports()" class="py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-amber-400 text-[10px] font-black flex justify-center items-center gap-1.5"><i class="fa-solid fa-print"></i>تقارير وطباعة PDF</button>
+                    <div class="flex bg-slate-200/80 p-1 rounded-2xl text-[9px] font-black text-slate-700 gap-1 overflow-x-auto no-scrollbar">
+                        ${tabs.map((name, index) => `<button onclick="switchGradesSubTab(${index})" id="grd-subtab-${index}" class="flex-1 py-1.5 px-2 rounded-xl transition-all whitespace-nowrap ${index === activeGradesSubTab ? 'bg-slate-900 text-amber-400 shadow-xs' : 'hover:bg-slate-300'}">${name}</button>`).join('')}
                     </div>
                 </div>
-                <div id="grades-subtab-content" class="space-y-3"></div>`;
+                <div id="grades-subtab-content"></div>`;
             updateGradesSectionOptions();
             renderGradesContent();
         }
 
-        function setThirdMonthRequired(enabled) {
-            if (!appState.gradesSettings || typeof appState.gradesSettings !== 'object') appState.gradesSettings = {};
-            appState.gradesSettings.includeMonth3 = !!enabled;
-            persistLocalState();
+        function switchGradesSubTab(subIndex) {
+            activeGradesSubTab = Math.max(0, Math.min(5, Number(subIndex) || 0));
+            if (activeGradesSubTab === 0 || activeGradesSubTab === 2) activeGradeMonth = Math.max(1, Math.min(3, activeGradeMonth));
+            for (let i = 0; i < 6; i++) {
+                const btn = document.getElementById(`grd-subtab-${i}`);
+                if (btn) btn.className = `flex-1 py-1.5 px-2 rounded-xl transition-all whitespace-nowrap ${i === activeGradesSubTab ? 'bg-slate-900 text-amber-400 font-black shadow-xs' : 'hover:bg-slate-300 text-slate-700 font-bold'}`;
+            }
             renderGradesContent();
-            showToast(enabled ? 'تم تفعيل الشهر الثالث؛ لن يُحسب الفصل حتى تكتمل الأشهر الثلاثة' : 'سيُحسب معدل الفصل من الشهرين الأول والثاني بعد اكتمالهما');
+        }
+
+        function switchGradeMonth(month) {
+            activeGradeMonth = Math.max(1, Math.min(3, Number(month) || 1));
+            renderGradesContent();
+        }
+
+        function renderGradeMonthTabs(prefix) {
+            const subjectName = (document.getElementById('grd-subject-select') || {}).value || 'all';
+            const thirdEnabled = isGradeMonth3Enabled(prefix, subjectName);
+            const months = [
+                { month: 1, title: 'الشهر الأول' },
+                { month: 2, title: 'الشهر الثاني' },
+                { month: 3, title: 'الشهر الثالث (اختياري)' }
+            ];
+            return `<div class="bg-white rounded-3xl p-3 shadow-sm border border-slate-200/80 mb-3">
+                <div class="flex gap-1 bg-slate-100 rounded-2xl p-1 overflow-x-auto no-scrollbar">${months.map(item => `<button onclick="switchGradeMonth(${item.month})" class="flex-1 min-w-max px-3 py-2 rounded-xl text-[10px] font-black transition-colors ${activeGradeMonth === item.month ? 'bg-slate-900 text-amber-400 shadow-sm' : 'text-slate-600 hover:bg-slate-200'}">${item.title}</button>`).join('')}</div>
+                <label class="flex items-center gap-2 mt-3 text-[10px] font-bold text-slate-700 cursor-pointer"><input type="checkbox" ${thirdEnabled ? 'checked' : ''} onchange="setGradeMonth3Enabled('${prefix}', this.checked)" class="w-4 h-4 accent-indigo-700"> احتساب الشهر الثالث الاختياري ضمن معدل هذا الفصل</label>
+            </div>`;
         }
 
         function getGradeFilteredStudents() {
             const selectedClass = (document.getElementById('grd-class-select') || {}).value || 'all';
             const selectedSection = (document.getElementById('grd-section-select') || {}).value || 'all';
             const selectedSubject = (document.getElementById('grd-subject-select') || {}).value || 'all';
-            const search = normalizeAcademicText((document.getElementById('grd-search-input') || {}).value || '');
             return sortStudentsAlphabetically(appState.students.filter(student => {
                 if (selectedClass !== 'all' && normalizeAcademicText(student.class) !== normalizeAcademicText(selectedClass)) return false;
                 if (selectedSection !== 'all') {
@@ -1962,251 +2197,447 @@
                 if (selectedSubject !== 'all') {
                     const directMatch = normalizeAcademicText(student.subject) === normalizeAcademicText(selectedSubject);
                     const classLinkMatch = isAssignedSubjectToClass(selectedSubject, student.class, student.section, student.studyType || 'صباحي');
-                    const hasSubjectRecord = !!(student.gradesBySubject && student.gradesBySubject[selectedSubject]);
-                    if (!directMatch && !classLinkMatch && !hasSubjectRecord) return false;
+                    if (!directMatch && !classLinkMatch) return false;
                 }
-                if (search && !normalizeAcademicText(student.name).includes(search)) return false;
                 return true;
             }));
         }
 
-        function getGradePeriodLabel(period) {
-            const labels = {
-                term1Month1: 'الشهر الأول - الفصل الأول', term1Month2: 'الشهر الثاني - الفصل الأول', term1Month3: 'الشهر الثالث - الفصل الأول',
-                midyear: 'نصف السنة', term2Month1: 'الشهر الأول - الفصل الثاني', term2Month2: 'الشهر الثاني - الفصل الثاني', term2Month3: 'الشهر الثالث - الفصل الثاني',
-                finalExam: 'الامتحان النهائي'
-            };
-            return labels[period] || 'الدرجة';
+        function renderGradeRows(filtered, inputRenderer, computedRenderer) {
+            return filtered.map((student, index) => `<tr class="border-b border-slate-100 text-[11px] align-middle">
+                <td class="grade-number-sticky p-2 text-center font-bold">${index + 1}</td>
+                <td class="grade-student-sticky p-2 font-bold text-slate-800 whitespace-nowrap">${escapeHtml(student.name)}</td>
+                ${inputRenderer ? inputRenderer(student) : ''}${computedRenderer ? computedRenderer(student) : ''}
+            </tr>`).join('');
         }
 
-        function getGradePeriodValue(student, subject, period) {
-            const record = getStudentGradeRecord(student, subject, false);
-            if (period === 'midyear') return getMidyearMark(student, subject);
-            if (period === 'finalExam') return gradeNumber(record.finalExam);
-            const match = String(period || '').match(/^(term1|term2)Month([123])$/);
-            return match ? getMonthlyMark(record, match[1], Number(match[2])) : null;
+        function renderMonthlyGradeRows(filtered, prefix, month) {
+            return filtered.map((student, index) => {
+                const record = getStudentGradeRecord(student, getGradeSubjectContext(student), false);
+                const breakdown = getMonthlyBreakdown(record, prefix, month);
+                const inputs = MONTHLY_GRADE_COMPONENTS.map(component => {
+                    const value = gradeInputValue(record[`${prefix}Month${month}${component.key}`], component.max);
+                    return `<td class="grade-data-cell text-center align-middle"><input type="number" min="0" max="${component.max}" step="1" inputmode="numeric" oninput="sanitizeGradeInteger(this, ${component.max})" id="grade-${prefix}-m${month}-${component.key}-${student.id}" value="${value}" aria-label="${component.label} للطالب ${escapeHtml(student.name)}" class="grade-cell-input font-bold text-[11px] text-slate-800" title="${component.label} (من ${component.max})"></td>`;
+                }).join('');
+                return `<tr class="border-b border-slate-100 text-[11px] align-middle">
+                    <td class="grade-number-sticky p-2 text-center font-bold">${index + 1}</td>
+                    <td class="grade-student-sticky p-2 font-bold text-slate-800 whitespace-nowrap">${escapeHtml(student.name)}</td>
+                    ${inputs}
+                    <td class="p-2 text-center font-black text-indigo-800 whitespace-nowrap">${breakdown.complete ? `${gradeDisplay(breakdown.total)} / 100` : '—'}</td>
+                </tr>`;
+            }).join('');
         }
 
-        function gradeMetric(label, value, color = 'indigo') {
-            const palette = {indigo:'bg-indigo-50 text-indigo-800 border-indigo-100', sky:'bg-sky-50 text-sky-800 border-sky-100', amber:'bg-amber-50 text-amber-800 border-amber-100', emerald:'bg-emerald-50 text-emerald-800 border-emerald-100', violet:'bg-violet-50 text-violet-800 border-violet-100'};
-            const shown = value === null ? 'غير مكتمل' : `${gradeDisplay(value)} / 100`;
-            return `<div class="rounded-xl border ${palette[color] || palette.indigo} p-2.5 min-w-0"><p class="text-[9px] font-bold opacity-75 leading-relaxed">${label}</p><p class="text-sm font-black mt-1 truncate">${shown}</p></div>`;
+        function gradeTableCard(title, description, headers, rows, saveHandler = '') {
+            return `<div class="bg-white rounded-3xl p-3.5 shadow-sm border border-slate-200/80">
+                <div class="bg-indigo-50 border border-indigo-200 p-2.5 rounded-2xl mb-3 text-indigo-900"><p class="text-[10px] font-black">${title}</p>${description ? `<p class="text-[10px] mt-1">${description}</p>` : ''}</div>
+                <div class="overflow-x-auto rounded-xl border border-slate-200"><table class="grade-entry-table w-full min-w-max text-right border-collapse"><thead class="bg-slate-900 text-amber-400 text-[10px]"><tr>${headers.map((header, index) => `<th id="grade-column-${index}" scope="col" class="p-2 text-center whitespace-nowrap ${index === 0 ? 'grade-number-sticky' : index === 1 ? 'grade-student-sticky' : ''}">${escapeHtml(String(header))}</th>`).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${headers.length}" class="p-4 text-center text-xs text-slate-400">لا توجد بيانات</td></tr>`}</tbody></table></div>
+                ${saveHandler ? `<button type="button" onclick="${saveHandler}()" class="w-full mt-3 bg-slate-900 text-amber-400 py-2.5 rounded-xl font-black text-xs shadow-md hover:bg-slate-800 transition-colors flex items-center justify-center gap-1.5"><i class="fa-solid fa-floppy-disk"></i><span>حفظ الدرجات</span></button>` : ''}
+            </div>`;
         }
 
         function renderGradesContent() {
             const container = document.getElementById('grades-subtab-content');
             if (!container) return;
             const filtered = getGradeFilteredStudents();
-            const period = (document.getElementById('grd-period-select') || {}).value || 'term1Month1';
-            if (!filtered.length) {
-                container.innerHTML = `<div class="bg-white rounded-3xl p-6 text-center shadow-sm border border-slate-200"><div class="w-12 h-12 rounded-2xl bg-slate-100 text-slate-400 mx-auto flex items-center justify-center text-lg mb-2"><i class="fa-solid fa-user-graduate"></i></div><p class="text-xs text-slate-500 font-bold">لا يوجد طلبة مطابقون للصف والشعبة والمادة والبحث المحدد</p></div>`;
+            // Header labels are plain text; gradeTableCard creates exactly one TH per data column.
+            const nameCols = ['#', 'اسم الطالب'];
+
+            if (activeGradesSubTab === 0 || activeGradesSubTab === 2) {
+                const prefix = activeGradesSubTab === 0 ? 'term1' : 'term2';
+                const label = activeGradesSubTab === 0 ? 'الفصل الأول' : 'الفصل الثاني';
+                const monthLabel = ['الأول', 'الثاني', 'الثالث'][activeGradeMonth - 1];
+                const rows = renderMonthlyGradeRows(filtered, prefix, activeGradeMonth);
+                const componentHeaders = MONTHLY_GRADE_COMPONENTS.map(component => `${component.label} / ${component.max}`);
+                const table = gradeTableCard(`${label} - الشهر ${monthLabel}`, '', [...nameCols, ...componentHeaders, 'درجة الشهر / 100'], rows, prefix === 'term1' ? 'saveTerm1Grades' : 'saveTerm2Grades');
+                container.innerHTML = renderGradeMonthTabs(prefix) + table;
                 return;
             }
-            const cards = filtered.map(student => {
-                const subject = getDefaultStudentGradeSubject(student);
-                const current = getGradePeriodValue(student, subject, period);
-                const termAverage = period.startsWith('term2') ? getTerm2Mark(student, subject) : getTerm1Mark(student, subject);
-                const termLabel = period.startsWith('term2') ? 'معدل الفصل الثاني' : 'معدل الفصل الأول';
-                const annual = getAnnualWorkMark(student, subject);
-                const result = getFinalResultMark(student, subject);
-                const resultText = result === null ? 'بانتظار اكتمال الدرجات' : (result >= 50 ? 'ناجح' : 'راسب');
-                const resultClass = result === null ? 'bg-slate-100 text-slate-500' : (result >= 50 ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800');
-                return `<article class="bg-white rounded-3xl p-3.5 shadow-sm border border-slate-200/80">
-                    <div class="flex items-start justify-between gap-2 mb-3">
-                        <div class="flex items-center gap-2.5 min-w-0"><div class="w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-100 to-sky-50 text-indigo-700 border border-indigo-100 flex items-center justify-center flex-shrink-0"><i class="fa-solid fa-user-graduate"></i></div><div class="min-w-0"><h4 class="text-xs font-black text-slate-800 leading-relaxed">${escapeHtml(student.name || 'بدون اسم')}</h4><p class="text-[9px] text-slate-400 mt-0.5">${escapeHtml(student.class || '')} • شعبة ${escapeHtml(student.section || '—')} • ${escapeHtml(student.studyType || 'صباحي')}</p><p class="text-[9px] text-indigo-500 mt-0.5 truncate">${escapeHtml(subject === 'all' ? (student.subject || 'المادة غير محددة') : subject)}</p></div></div>
-                        <span class="text-[9px] px-2 py-1 rounded-full font-black whitespace-nowrap ${resultClass}">${resultText}</span>
-                    </div>
-                    <div class="grid grid-cols-2 gap-2">
-                        ${gradeMetric(`الدرجة الحالية • ${getGradePeriodLabel(period)}`, current, 'indigo')}
-                        ${gradeMetric(termLabel, termAverage, 'sky')}
-                        ${gradeMetric('السعي السنوي', annual, 'amber')}
-                        ${gradeMetric('النتيجة النهائية', result, 'emerald')}
-                    </div>
-                    <div class="flex gap-2 mt-3">
-                        <button onclick='openGradeEditModal(${JSON.stringify(String(student.id))})' class="flex-1 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-amber-400 text-[10px] font-black flex items-center justify-center gap-1.5"><i class="fa-solid fa-pen-to-square"></i>تعديل الدرجة</button>
-                        <button onclick='openGradeDetailsModal(${JSON.stringify(String(student.id))})' class="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-black flex items-center justify-center gap-1.5"><i class="fa-solid fa-eye"></i>عرض التفاصيل</button>
-                    </div>
-                </article>`;
-            }).join('');
-            container.innerHTML = `<div class="flex justify-between items-center px-1 mb-1"><span class="text-[10px] text-slate-500 font-bold">عدد الطلبة: ${filtered.length}</span><span class="text-[9px] text-slate-400">${isThirdMonthRequired() ? 'الحساب يتطلب 3 أشهر' : 'الحساب يتطلب شهرين'}</span></div>${cards}`;
-        }
 
-        function getGradeInputNumber(id, max) {
-            const element = document.getElementById(id);
-            if (!element || element.value === '') return null;
-            const number = Number(element.value);
-            if (!Number.isFinite(number)) return null;
-            return Math.max(0, Math.min(max, number));
-        }
-
-        function gradeInputField(id, label, value, max, placeholder = '') {
-            return `<div><label for="${id}" class="block text-[10px] text-slate-600 font-bold mb-1">${label} <span class="text-slate-400">/${max}</span></label><input id="${id}" type="number" inputmode="decimal" min="0" max="${max}" step="0.25" value="${value === null || value === undefined ? '' : escapeHtml(value)}" placeholder="${placeholder}" oninput="updateGradeMonthPreview()" class="w-full border border-slate-200 bg-slate-50 rounded-xl p-2.5 text-sm font-black text-slate-800 outline-none focus:border-indigo-400"></div>`;
-        }
-
-        function updateGradeEntryMode() {
-            // تم اعتماد التوزيع التفصيلي فقط: يومي من 20 وورقة من 80.
-            updateGradeMonthPreview();
-        }
-
-        function updateGradeMonthPreview() {
-            const preview = document.getElementById('grade-month-preview');
-            if (!preview) return;
-            const ids = [['grade-comp-attendance',10],['grade-comp-activity',5],['grade-comp-behavior',5],['grade-comp-grammar',30],['grade-comp-literature',30],['grade-comp-composition',20]];
-            const values = ids.map(([id,max]) => getGradeInputNumber(id,max));
-            const entered = values.filter(value => value !== null).length;
-            const total = entered === values.length ? values.reduce((sum, value) => sum + value, 0) : null;
-            preview.innerHTML = total === null
-                ? `أكمل مكونات الدرجة الستة ليظهر المجموع (${entered} من 6 مكتملة).`
-                : `مجموع الشهر: <strong>${gradeDisplay(total)} / 100</strong>`;
-        }
-
-        function showGradeModal(title, iconClass, html, showSubmit = true) {
-            const modal = document.getElementById('action-modal');
-            const box = document.getElementById('modal-box');
-            document.getElementById('modal-title').innerText = title;
-            document.getElementById('modal-subtitle').innerText = 'الدرجات المدرسية • حفظ محلي تلقائي';
-            document.getElementById('modal-icon').className = `fa-solid ${iconClass}`;
-            document.getElementById('modal-body').innerHTML = html;
-            const submit = document.getElementById('modal-submit-btn');
-            if (submit) {
-                submit.style.display = showSubmit ? '' : 'none';
-                const textEl = submit.querySelector('span');
-                if (textEl) textEl.innerText = showSubmit ? 'حفظ الدرجة' : 'تأكيد الحفظ';
+            if (!filtered.length) {
+                container.innerHTML = `<div class="bg-white rounded-3xl p-5 text-center text-xs text-slate-400 font-bold">لا يوجد طلبة مطابقون للصف والشعبة والمادة المحددة</div>`;
+                return;
             }
-            modal.classList.remove('opacity-0', 'pointer-events-none');
-            box.classList.remove('scale-95');
-            box.classList.add('scale-100');
-        }
 
-        function openGradeEditModal(studentId) {
-            const student = appState.students.find(item => String(item.id) === String(studentId));
-            if (!student) { showToast('لم يتم العثور على الطالب', 'error'); return; }
-            const subject = getDefaultStudentGradeSubject(student);
-            const period = (document.getElementById('grd-period-select') || {}).value || 'term1Month1';
-            currentGradeEditContext = { studentId: String(student.id), subject, period };
-            currentModalType = 'grade_edit';
-            const record = getStudentGradeRecord(student, subject, true);
-            let fields = '';
-            if (period === 'midyear' || period === 'finalExam') {
-                const fieldId = period === 'midyear' ? 'grade-entry-direct100' : 'grade-entry-final100';
-                const label = period === 'midyear' ? 'درجة نصف السنة' : 'درجة الامتحان النهائي';
-                const value = period === 'midyear' ? (record.midyearDirect ?? '') : (record.finalExam ?? '');
-                fields = `<div class="rounded-2xl bg-indigo-50 border border-indigo-100 p-3"><p class="text-[10px] text-indigo-800 font-bold">${label} من 100</p><div class="mt-2">${gradeInputField(fieldId, label, value, 100)}</div></div>`;
+            let html = '';
+            if (activeGradesSubTab === 1) {
+                const rows = renderGradeRows(filtered, s => {
+                    const record = getStudentGradeRecord(s);
+                    return `<td class="grade-data-cell text-center"><input type="number" min="0" max="100" step="1" inputmode="numeric" oninput="sanitizeGradeInteger(this, 100)" id="grade-mid-direct-${s.id}" value="${gradeInputValue(record.midyearDirect, 100)}" placeholder="—" aria-label="درجة نصف السنة للطالب ${escapeHtml(s.name)} من 100" class="grade-cell-input font-bold text-indigo-900"></td>`;
+                }, null);
+                html = gradeTableCard('نصف السنة', '', [...nameCols, 'درجة نصف السنة / 100'], rows, 'saveMidyearGrades');
+            } else if (activeGradesSubTab === 3) {
+                const rows = renderGradeRows(filtered, null, s => `<td class="p-2 text-center font-bold text-indigo-700">${gradeDisplay(getTerm1Mark(s))}</td><td class="p-2 text-center font-bold text-sky-700">${gradeDisplay(getMidyearMark(s))}</td><td class="p-2 text-center font-bold text-violet-700">${gradeDisplay(getTerm2Mark(s))}</td><td class="p-2 text-center font-black text-amber-700">${gradeDisplay(getAnnualWorkMark(s))} / 100</td>`);
+                html = gradeTableCard('السعي السنوي', 'السعي السنوي = (معدل الفصل الأول + درجة نصف السنة + معدل الفصل الثاني) ÷ 3. لا يظهر السعي قبل اكتمال الفصول والدرجات المطلوبة.', [...nameCols, 'الفصل الأول', 'نصف السنة', 'الفصل الثاني', 'السعي السنوي'], rows);
+            } else if (activeGradesSubTab === 4) {
+                const rows = renderGradeRows(filtered, s => {
+                    const g = getStudentGradeRecord(s);
+                    return `<td class="grade-data-cell text-center"><input type="number" min="0" max="100" step="1" inputmode="numeric" oninput="sanitizeGradeInteger(this, 100)" id="grade-final-${s.id}" value="${gradeInputValue(g.finalExam, 100)}" class="grade-cell-input font-bold text-purple-900"></td>`;
+                }, s => `<td class="p-2 text-center font-black text-amber-700">${gradeDisplay(getAnnualWorkMark(s))}</td>`);
+                html = gradeTableCard('الامتحان النهائي', 'أدخل درجة صحيحة من 0 إلى 100. تُحسب النتيجة النهائية فقط بعد اكتمال السعي السنوي والدرجة النهائية.', [...nameCols, 'الامتحان النهائي /100', 'السعي السنوي'], rows, 'saveFinalGrades');
             } else {
-                const match = period.match(/^(term1|term2)Month([123])$/);
-                const key = match ? `${match[1]}Month${match[2]}` : 'term1Month1';
-                if (!record.monthDetails || typeof record.monthDetails !== 'object') record.monthDetails = {};
-                const savedDetail = record.monthDetails[key] || null;
-                fields = `<div class="rounded-2xl bg-indigo-50 border border-indigo-100 p-3"><p class="text-xs font-black text-indigo-900">${getGradePeriodLabel(period)}</p><p class="text-[10px] text-indigo-700 mt-1">إدخال الدرجة بالتوزيع التفصيلي فقط.</p>
-                    <div class="mt-3">
-                        <p class="text-[10px] font-black text-slate-700 mb-2">اليومي من 20 (حضور 10 + نشاط 5 + سلوك 5)</p>
-                        <div class="grid grid-cols-3 gap-2">
-                            ${gradeInputField('grade-comp-attendance','الحضور',savedDetail?.attendance ?? '',10)}
-                            ${gradeInputField('grade-comp-activity','النشاط',savedDetail?.activity ?? '',5)}
-                            ${gradeInputField('grade-comp-behavior','السلوك',savedDetail?.behavior ?? '',5)}
-                        </div>
-                        <p class="text-[10px] font-black text-slate-700 mt-3 mb-2">الورقة من 80 (قواعد 30 + أدب 30 + إنشاء 20)</p>
-                        <div class="grid grid-cols-3 gap-2">
-                            ${gradeInputField('grade-comp-grammar','القواعد',savedDetail?.grammar ?? '',30)}
-                            ${gradeInputField('grade-comp-literature','الأدب',savedDetail?.literature ?? '',30)}
-                            ${gradeInputField('grade-comp-composition','الإنشاء',savedDetail?.composition ?? '',20)}
-                        </div>
-                    </div>
-                    <div id="grade-month-preview" class="mt-3 rounded-xl bg-white border border-indigo-100 p-3 text-center text-xs font-bold text-indigo-800"></div>
-                </div>`;
+                const rows = renderGradeRows(filtered, null, s => {
+                    const annual = getAnnualWorkMark(s);
+                    const record = getStudentGradeRecord(s);
+                    const final = gradeNumber(record.finalExam);
+                    const result = getFinalResultMark(s);
+                    const complete = result !== null;
+                    const passed = complete && result >= 50;
+                    const stateClass = !complete ? 'bg-slate-100 text-slate-600' : passed ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800';
+                    const stateLabel = !complete ? 'غير مكتملة' : passed ? 'ناجح' : 'راسب';
+                    return `<td class="p-2 text-center">${gradeDisplay(annual)}</td><td class="p-2 text-center">${gradeDisplay(final)}</td><td class="p-2 text-center font-black text-lg ${complete ? (passed ? 'text-emerald-700' : 'text-rose-700') : 'text-slate-500'}">${gradeDisplay(result)}${complete ? ' / 100' : ''}</td><td class="p-2 text-center"><span class="px-2 py-1 rounded-full text-[10px] font-black ${stateClass}">${stateLabel}</span></td>`;
+                });
+                html = gradeTableCard('النتيجة المدرسية', 'النتيجة النهائية = (السعي السنوي + الامتحان النهائي) ÷ 2. لا تظهر النتيجة قبل اكتمال الدرجات المطلوبة.', [...nameCols, 'السعي السنوي', 'النهائي', 'النتيجة /100', 'الحالة'], rows);
             }
-            showGradeModal('تعديل درجة الطالب', 'fa-pen-to-square', `<div class="space-y-3"><div class="rounded-2xl bg-slate-50 border border-slate-100 p-3"><p class="text-sm font-black text-slate-800">${escapeHtml(student.name)}</p><p class="text-[10px] text-slate-500 mt-1">${escapeHtml(student.class || '')} • شعبة ${escapeHtml(student.section || '—')} • ${escapeHtml(subject === 'all' ? 'المادة غير محددة' : subject)}</p></div>${fields}<p class="text-[9px] text-slate-400 leading-relaxed">تُحفظ التعديلات في هذا المتصفح. نصف السنة والامتحان النهائي يُدخل كل منهما من 100.</p></div>`);
-            if (period !== 'midyear' && period !== 'finalExam') updateGradeMonthPreview();
-            else {
-                const input = document.getElementById(period === 'midyear' ? 'grade-entry-direct100' : 'grade-entry-final100');
-                if (input) input.setAttribute('inputmode', 'decimal');
-            }
+            container.innerHTML = html;
         }
 
-        function saveGradeModal() {
-            if (!currentGradeEditContext) return;
-            const student = appState.students.find(item => String(item.id) === currentGradeEditContext.studentId);
-            if (!student) { showToast('لم يتم العثور على الطالب', 'error'); return; }
-            const { subject, period } = currentGradeEditContext;
-            const record = getStudentGradeRecord(student, subject, true);
-            if (period === 'midyear') {
-                const value = getGradeInputNumber('grade-entry-direct100', 100);
-                record.midyearMode = 'direct';
-                record.midyearDirect = value === null ? '' : value;
-            } else if (period === 'finalExam') {
-                const value = getGradeInputNumber('grade-entry-final100', 100);
-                record.finalExam = value === null ? '' : value;
-            } else {
-                const match = period.match(/^(term1|term2)Month([123])$/);
-                if (!match) return;
-                const key = `${match[1]}Month${match[2]}`;
-                if (!record.monthDetails || typeof record.monthDetails !== 'object') record.monthDetails = {};
-                const configs = [['attendance',10,'grade-comp-attendance'],['activity',5,'grade-comp-activity'],['behavior',5,'grade-comp-behavior'],['grammar',30,'grade-comp-grammar'],['literature',30,'grade-comp-literature'],['composition',20,'grade-comp-composition']];
-                const detail = { mode: 'components' };
-                const values = {};
-                for (const [field,max,id] of configs) {
-                    const value = getGradeInputNumber(id, max);
-                    if (value === null) { showToast('أكمل جميع مكونات الدرجة التفصيلية قبل الحفظ', 'error'); return; }
-                    values[field] = value;
+        function saveMonthlyGrades(prefix) {
+            const month = activeGradeMonth;
+            getGradeFilteredStudents().forEach(student => {
+                const record = getStudentGradeRecord(student);
+                const entered = MONTHLY_GRADE_COMPONENTS.map(component => {
+                    const input = document.getElementById(`grade-${prefix}-m${month}-${component.key}-${student.id}`);
+                    return { component, value: readGradeIntegerInput(input, component.max) };
+                });
+                const hasInput = entered.some(item => item.value !== '');
+                const hadSavedComponents = MONTHLY_GRADE_COMPONENTS.some(component => gradeNumber(record[`${prefix}Month${month}${component.key}`]) !== null);
+                entered.forEach(item => {
+                    const field = `${prefix}Month${month}${item.component.key}`;
+                    record[field] = item.value === '' ? '' : item.value;
+                });
+                if (hasInput) {
+                    const allEntered = entered.every(item => item.value !== '');
+                    record[`${prefix}Month${month}`] = allEntered ? entered.reduce((sum, item) => sum + item.value, 0) : '';
+                } else if (hadSavedComponents) {
+                    // The user cleared all previously saved components.
+                    record[`${prefix}Month${month}`] = '';
                 }
-                Object.assign(detail, values);
-                const total = Object.values(values).reduce((sum, value) => sum + value, 0);
-                record.monthDetails[key] = detail;
-                record[key] = Math.max(0, Math.min(100, total));
+            });
+            persistLocalState();
+            renderGradesContent();
+            showToast(prefix === 'term1' ? 'تم حفظ درجات الشهر للفصل الأول' : 'تم حفظ درجات الشهر للفصل الثاني');
+        }
+
+        function saveTerm1Grades() { saveMonthlyGrades('term1'); }
+
+        function saveMidyearGrades() {
+            getGradeFilteredStudents().forEach(student => {
+                const record = getStudentGradeRecord(student);
+                record.midyearDirect = readGradeIntegerInput(document.getElementById(`grade-mid-direct-${student.id}`), 100);
+                record.midyearMode = 'direct';
+                delete record.midyearWritten;
+                delete record.midyearOral;
+                delete record.midyearMonth1;
+                delete record.midyearMonth2;
+            });
+            persistLocalState();
+            renderGradesContent();
+            showToast('تم حفظ درجات نصف السنة');
+        }
+
+        function saveTerm2Grades() { saveMonthlyGrades('term2'); }
+
+        function saveFinalGrades() {
+            getGradeFilteredStudents().forEach(student => {
+                const record = getStudentGradeRecord(student);
+                record.finalExam = readGradeIntegerInput(document.getElementById(`grade-final-${student.id}`), 100);
+            });
+            persistLocalState();
+            renderGradesContent();
+            showToast('تم حفظ درجات الامتحان النهائي');
+        }
+
+        // --- 7. NOTES, MEMO AND CALENDAR WITH LOCAL REMINDERS ---
+        function getLocalDateKey(date = new Date()) {
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
+        }
+
+        function dateFromLocalKey(key) {
+            const parts = String(key || '').split('-').map(Number);
+            if (parts.length !== 3 || parts.some(n => !Number.isFinite(n))) return new Date();
+            return new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0, 0);
+        }
+
+        function formatLocalDate(key, options = { year: 'numeric', month: 'long', day: 'numeric' }) {
+            return dateFromLocalKey(key).toLocaleDateString('ar-IQ', options);
+        }
+
+        function openNotesView(view) {
+            activeNotesView = view || 'home';
+            if (activeNotesView === 'memo-editor') activeMemoId = null;
+            if (activeNotesView === 'calendar') {
+                selectedCalendarDate = selectedCalendarDate || getLocalDateKey(new Date());
+                const selected = dateFromLocalKey(selectedCalendarDate);
+                calendarCursor = new Date(selected.getFullYear(), selected.getMonth(), 1);
+            }
+            renderNotesTab(document.getElementById('app-content'));
+        }
+
+        function renderNotesTab(container) {
+            if (!container) return;
+            if (!Array.isArray(appState.notes)) appState.notes = [];
+            if (!Array.isArray(appState.calendarReminders)) appState.calendarReminders = [];
+
+            if (activeNotesView === 'home') {
+                const today = getLocalDateKey(new Date());
+                const todayReminders = appState.calendarReminders.filter(item => item.date === today && !item.notified).length;
+                container.innerHTML = `
+                    <div class="mb-4">
+                        <div class="text-[10px] text-slate-500 font-bold mb-1">مساحتك الشخصية</div>
+                        <h3 class="text-lg font-black text-slate-800">الملاحظات والتقويم</h3>
+                        <p class="text-[11px] text-slate-500 mt-1">دوّن أفكارك ورتّب مواعيدك وتذكيراتك في مكان واحد.</p>
+                    </div>
+                    <div class="grid grid-cols-1 gap-3.5">
+                        <button onclick="openNotesView('memo-list')" class="w-full text-right bg-white rounded-3xl p-4 shadow-sm border border-slate-200 hover:border-indigo-300 transition-all flex items-center gap-3">
+                            <div class="w-14 h-14 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center text-2xl"><i class="fa-solid fa-book-open"></i></div>
+                            <div class="flex-1"><div class="font-black text-sm text-slate-800">الملاحظات</div><p class="text-[10px] text-slate-500 mt-1">مذكرة مثل مذكرات الهاتف، مع تاريخ لكل ملاحظة وإمكانية الرجوع إليها وتعديلها.</p><div class="text-[10px] text-indigo-700 font-black mt-2">${appState.notes.length} ملاحظة محفوظة</div></div>
+                            <i class="fa-solid fa-chevron-left text-slate-300"></i>
+                        </button>
+                        <button onclick="openNotesView('calendar')" class="w-full text-right bg-white rounded-3xl p-4 shadow-sm border border-slate-200 hover:border-indigo-300 transition-all flex items-center gap-3">
+                            <div class="w-14 h-14 rounded-2xl bg-sky-50 text-sky-600 flex items-center justify-center text-2xl"><i class="fa-solid fa-calendar-days"></i></div>
+                            <div class="flex-1"><div class="font-black text-sm text-slate-800">التقويم</div><p class="text-[10px] text-slate-500 mt-1">تقويم شهري؛ اختر يوماً لإضافة ملاحظة أو تذكير بوقت محدد وتنبيه.</p><div class="text-[10px] text-sky-700 font-black mt-2">${appState.calendarReminders.length} تذكير محفوظ · ${todayReminders} تذكير اليوم غير مُنفذ</div></div>
+                            <i class="fa-solid fa-chevron-left text-slate-300"></i>
+                        </button>
+                    </div>
+                    <div class="mt-4 bg-indigo-50 border border-indigo-100 rounded-2xl p-3 text-[10px] leading-relaxed text-indigo-900"><i class="fa-solid fa-lock ml-1"></i> تُحفظ الملاحظات والتذكيرات محلياً على هذا الحاسوب داخل بيانات البرنامج.</div>`;
+                return;
+            }
+
+            if (activeNotesView === 'memo-list') {
+                const notes = [...appState.notes].sort((a, b) => (Number(b.updatedAt) || Number(b.createdAt) || 0) - (Number(a.updatedAt) || Number(a.createdAt) || 0));
+                container.innerHTML = `
+                    <div class="flex items-center justify-between gap-2 mb-3"><button onclick="openNotesView('home')" class="px-3 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 text-[10px] font-bold"><i class="fa-solid fa-arrow-right ml-1"></i>رجوع</button><h3 class="font-black text-slate-800 text-sm">مذكراتي</h3><button onclick="newMemo()" class="px-3 py-2 rounded-xl bg-slate-900 text-amber-400 text-[10px] font-black"><i class="fa-solid fa-plus ml-1"></i>ملاحظة</button></div>
+                    ${notes.length ? `<div class="space-y-3">${notes.map(note => `<div class="bg-white rounded-2xl p-3.5 shadow-sm border border-slate-200"><button type="button" onclick="editMemo(${Number(note.id)})" class="block w-full text-right"><div class="flex items-center justify-between gap-2"><span class="font-black text-sm text-slate-800">${escapeHtml(note.title || 'ملاحظة بدون عنوان')}</span><span class="text-[9px] text-slate-500 whitespace-nowrap">${escapeHtml(formatLocalDate(note.date || getLocalDateKey()))}</span></div><p class="text-[11px] text-slate-600 mt-2 leading-relaxed whitespace-pre-line">${escapeHtml(String(note.content || '').slice(0, 240))}${String(note.content || '').length > 240 ? '…' : ''}</p><div class="text-[9px] text-indigo-600 font-bold mt-2">فتح الملاحظة وتعديلها <i class="fa-solid fa-chevron-left mr-1"></i></div></button><div class="border-t border-slate-100 mt-3 pt-2 flex justify-end"><button type="button" onclick="deleteMemo(${Number(note.id)})" class="text-[10px] text-rose-600 font-bold px-2 py-1"><i class="fa-solid fa-trash ml-1"></i>حذف</button></div></div>`).join('')}</div>` : `<div class="bg-white rounded-3xl border border-dashed border-slate-300 p-7 text-center"><div class="w-14 h-14 rounded-2xl bg-amber-50 text-amber-500 flex items-center justify-center text-2xl mx-auto mb-3"><i class="fa-solid fa-book-open"></i></div><div class="font-black text-slate-700 text-sm">لا توجد ملاحظات بعد</div><p class="text-[10px] text-slate-500 mt-1">ابدأ بكتابة أول ملاحظة، وستجدها هنا حسب تاريخها.</p><button onclick="newMemo()" class="mt-4 bg-slate-900 text-amber-400 rounded-xl px-4 py-2.5 text-xs font-black">كتابة ملاحظة</button></div>`}`;
+                return;
+            }
+
+            if (activeNotesView === 'memo-editor') {
+                const note = appState.notes.find(item => String(item.id) === String(activeMemoId));
+                const isEdit = !!note;
+                const date = note ? (note.date || getLocalDateKey()) : (selectedCalendarDate || getLocalDateKey());
+                container.innerHTML = `
+                    <div class="flex items-center justify-between gap-2 mb-3"><button onclick="openNotesView('memo-list')" class="px-3 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 text-[10px] font-bold"><i class="fa-solid fa-arrow-right ml-1"></i>المذكرات</button><span class="font-black text-slate-800 text-sm">${isEdit ? 'تعديل الملاحظة' : 'ملاحظة جديدة'}</span><span class="w-12"></span></div>
+                    <div class="bg-white rounded-3xl p-4 shadow-sm border border-slate-200 space-y-3">
+                        <div><label for="memo-date" class="block text-[10px] font-bold text-slate-600 mb-1">تاريخ الملاحظة</label><input id="memo-date" type="date" value="${escapeHtml(date)}" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold outline-none"></div>
+                        <div><label for="memo-title" class="block text-[10px] font-bold text-slate-600 mb-1">العنوان</label><input id="memo-title" type="text" maxlength="120" value="${escapeHtml(note ? note.title || '' : '')}" placeholder="عنوان الملاحظة" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:border-amber-400"></div>
+                        <div><label for="memo-content" class="block text-[10px] font-bold text-slate-600 mb-1">نص الملاحظة</label><textarea id="memo-content" rows="10" placeholder="اكتب ملاحظتك هنا..." class="w-full bg-amber-50/60 border border-amber-100 rounded-2xl p-3 text-sm leading-7 outline-none focus:border-amber-300 resize-y">${escapeHtml(note ? note.content || '' : '')}</textarea></div>
+                        <button type="button" onclick="saveMemo()" class="w-full bg-slate-900 text-amber-400 rounded-xl py-3 font-black text-xs shadow-md"><i class="fa-solid fa-floppy-disk ml-1"></i>حفظ الملاحظة</button>
+                        ${isEdit ? `<button type="button" onclick="deleteMemo(${Number(note.id)})" class="w-full bg-rose-50 text-rose-700 rounded-xl py-2.5 font-bold text-xs">حذف الملاحظة</button>` : ''}
+                    </div>`;
+                return;
+            }
+
+            if (activeNotesView === 'calendar') {
+                renderNotesCalendar(container);
+            }
+        }
+
+        function newMemo() {
+            activeMemoId = null;
+            activeNotesView = 'memo-editor';
+            renderNotesTab(document.getElementById('app-content'));
+        }
+
+        function editMemo(id) {
+            activeMemoId = id;
+            const note = appState.notes.find(item => String(item.id) === String(id));
+            if (note && note.date) selectedCalendarDate = note.date;
+            activeNotesView = 'memo-editor';
+            renderNotesTab(document.getElementById('app-content'));
+        }
+
+        function saveMemo() {
+            const date = (document.getElementById('memo-date') || {}).value || getLocalDateKey();
+            const title = ((document.getElementById('memo-title') || {}).value || '').trim();
+            const content = ((document.getElementById('memo-content') || {}).value || '').trim();
+            if (!title && !content) { showToast('اكتب عنوان الملاحظة أو نصها أولاً', 'error'); return; }
+            const now = Date.now();
+            let note = appState.notes.find(item => String(item.id) === String(activeMemoId));
+            if (note) {
+                note.date = date; note.title = title || 'ملاحظة بدون عنوان'; note.content = content; note.updatedAt = now;
+            } else {
+                let uniqueId = now;
+                while (appState.notes.some(item => String(item.id) === String(uniqueId))) uniqueId += 1;
+                note = { id: uniqueId, date, title: title || 'ملاحظة بدون عنوان', content, createdAt: now, updatedAt: now };
+                appState.notes.push(note);
+                activeMemoId = note.id;
+            }
+            selectedCalendarDate = date;
+            persistLocalState();
+            activeNotesView = 'memo-list';
+            renderNotesTab(document.getElementById('app-content'));
+            showToast('تم حفظ الملاحظة');
+        }
+
+        function deleteMemo(id) {
+            const requestedId = String(id);
+            const exists = appState.notes.some(item => String(item.id) === requestedId);
+            if (!exists) {
+                showToast('تعذر العثور على الملاحظة؛ حدّث القائمة وحاول مجدداً', 'error');
+                activeNotesView = 'memo-list';
+                renderNotesTab(document.getElementById('app-content'));
+                return;
+            }
+            // Delete directly rather than depending on browser confirm(), which may be blocked in local-file webviews.
+            appState.notes = appState.notes.filter(item => String(item.id) !== requestedId);
+            if (String(activeMemoId) === requestedId) activeMemoId = null;
+            persistLocalState();
+            activeNotesView = 'memo-list';
+            renderNotesTab(document.getElementById('app-content'));
+            showToast('تم حذف الملاحظة');
+        }
+
+        function moveCalendarMonth(delta) {
+            calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() + delta, 1);
+            renderNotesCalendar(document.getElementById('app-content'));
+        }
+
+        function selectCalendarDate(key) {
+            selectedCalendarDate = key;
+            activeReminderId = null;
+            renderNotesCalendar(document.getElementById('app-content'));
+        }
+
+        function renderNotesCalendar(container) {
+            if (!container) return;
+            const year = calendarCursor.getFullYear();
+            const month = calendarCursor.getMonth();
+            const monthTitle = new Date(year, month, 1).toLocaleDateString('ar-IQ', { year: 'numeric', month: 'long' });
+            const firstDay = new Date(year, month, 1).getDay();
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const today = getLocalDateKey(new Date());
+            const dayNames = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+            let dayCells = '';
+            for (let blank = 0; blank < firstDay; blank++) dayCells += '<div></div>';
+            for (let day = 1; day <= daysInMonth; day++) {
+                const key = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                const hasReminder = appState.calendarReminders.some(item => item.date === key);
+                const selected = selectedCalendarDate === key;
+                const isToday = today === key;
+                dayCells += `<button onclick="selectCalendarDate('${key}')" class="calendar-day-btn relative rounded-xl text-xs font-bold border ${selected ? 'bg-slate-900 text-amber-400 border-slate-900 shadow-sm' : isToday ? 'bg-indigo-50 border-indigo-300 text-indigo-800' : 'bg-white border-slate-100 text-slate-700 hover:bg-slate-50'}">${day}${hasReminder ? '<span class="absolute bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full bg-rose-500"></span>' : ''}</button>`;
+            }
+            const selectedReminders = appState.calendarReminders.filter(item => item.date === selectedCalendarDate).sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')));
+            const editing = appState.calendarReminders.find(item => Number(item.id) === Number(activeReminderId));
+            const formTitle = editing ? editing.title || '' : '';
+            const formBody = editing ? editing.note || '' : '';
+            const formTime = editing ? editing.time || '09:00' : '09:00';
+            const formEnabled = editing ? editing.alertEnabled !== false : true;
+            container.innerHTML = `
+                <div class="flex items-center justify-between gap-2 mb-3"><button onclick="openNotesView('home')" class="px-3 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 text-[10px] font-bold"><i class="fa-solid fa-arrow-right ml-1"></i>رجوع</button><h3 class="font-black text-slate-800 text-sm">التقويم</h3><button onclick="resetReminderForm()" class="px-3 py-2 rounded-xl bg-slate-900 text-amber-400 text-[10px] font-black"><i class="fa-solid fa-plus ml-1"></i>تذكير</button></div>
+                <div class="bg-white rounded-3xl p-3.5 shadow-sm border border-slate-200 mb-3">
+                    <div class="flex items-center justify-between mb-3"><button onclick="moveCalendarMonth(-1)" aria-label="الشهر السابق" class="w-9 h-9 rounded-xl bg-slate-100 text-slate-700"><i class="fa-solid fa-chevron-right"></i></button><div class="text-center"><div class="font-black text-slate-800 text-sm">${escapeHtml(monthTitle)}</div><div class="text-[9px] text-slate-500 mt-1">اختر يوماً لعرض الملاحظات والتذكيرات</div></div><button onclick="moveCalendarMonth(1)" aria-label="الشهر التالي" class="w-9 h-9 rounded-xl bg-slate-100 text-slate-700"><i class="fa-solid fa-chevron-left"></i></button></div>
+                    <div class="grid grid-cols-7 gap-1 mb-1">${dayNames.map(name => `<div class="text-center text-[8px] sm:text-[9px] font-black text-slate-500 py-1">${name}</div>`).join('')}</div>
+                    <div class="grid grid-cols-7 gap-1">${dayCells}</div>
+                    <div class="mt-3 px-3 py-2 rounded-xl bg-indigo-50 text-indigo-900 text-xs font-black"><i class="fa-solid fa-calendar-day ml-1"></i>${escapeHtml(formatLocalDate(selectedCalendarDate))}</div>
+                </div>
+                <div class="bg-white rounded-3xl p-3.5 shadow-sm border border-slate-200 mb-3">
+                    <div class="font-black text-slate-800 text-xs mb-3">${editing ? 'تعديل التذكير' : 'إضافة ملاحظة أو تذكير لهذا اليوم'}</div>
+                    <div class="space-y-3">
+                        <div><label for="cal-reminder-title" class="block text-[10px] font-bold text-slate-600 mb-1">العنوان</label><input id="cal-reminder-title" type="text" maxlength="120" value="${escapeHtml(formTitle)}" placeholder="مثلاً: موعد أو مهمة" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold outline-none"></div>
+                        <div><label for="cal-reminder-note" class="block text-[10px] font-bold text-slate-600 mb-1">التفاصيل / الملاحظة</label><textarea id="cal-reminder-note" rows="3" placeholder="تفاصيل التذكير (اختياري)" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs leading-6 outline-none">${escapeHtml(formBody)}</textarea></div>
+                        <div><label for="cal-reminder-time" class="block text-[10px] font-bold text-slate-600 mb-1">وقت التنبيه</label><input id="cal-reminder-time" type="time" value="${escapeHtml(formTime)}" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold outline-none"></div>
+                        <label class="flex items-center gap-2 text-[10px] font-bold text-slate-700"><input id="cal-reminder-alert" type="checkbox" ${formEnabled ? 'checked' : ''} class="w-4 h-4 accent-indigo-700"> تفعيل التنبيه عند حلول الوقت</label>
+                        <div class="flex gap-2"><button onclick="saveCalendarReminder()" class="flex-1 bg-slate-900 text-amber-400 rounded-xl py-2.5 font-black text-xs"><i class="fa-solid fa-bell ml-1"></i>حفظ التذكير</button>${editing ? `<button onclick="deleteCalendarReminder(${Number(editing.id)})" class="px-4 bg-rose-50 text-rose-700 rounded-xl text-xs font-bold">حذف</button>` : ''}</div>
+                    </div>
+                </div>
+                <div class="bg-white rounded-3xl p-3.5 shadow-sm border border-slate-200">
+                    <div class="font-black text-slate-800 text-xs mb-3">ملاحظات هذا اليوم <span class="text-slate-400">(${selectedReminders.length})</span></div>
+                    ${selectedReminders.length ? `<div class="space-y-2">${selectedReminders.map(item => `<div class="rounded-2xl border border-slate-100 bg-slate-50 p-3"><button onclick="editCalendarReminder(${Number(item.id)})" class="w-full text-right"><div class="flex justify-between items-start gap-2"><span class="font-black text-xs text-slate-800">${escapeHtml(item.title || 'تذكير بدون عنوان')}</span><span class="text-[10px] font-black text-indigo-700">${escapeHtml(item.time || '09:00')}</span></div><p class="text-[10px] text-slate-600 mt-1 whitespace-pre-line leading-relaxed">${escapeHtml(item.note || 'لا توجد تفاصيل إضافية')}</p><div class="mt-2 text-[9px] ${item.notified ? 'text-emerald-700' : item.alertEnabled === false ? 'text-slate-500' : 'text-amber-700'} font-bold">${item.notified ? 'تم إرسال التنبيه' : item.alertEnabled === false ? 'التنبيه غير مفعل' : 'التنبيه مفعل'}</div></button></div>`).join('')}</div>` : `<div class="text-center text-[10px] text-slate-400 py-4">لا توجد ملاحظات لهذا اليوم. أضف تذكيراً من النموذج أعلاه.</div>`}
+                    <p class="text-[9px] text-slate-500 leading-relaxed mt-3">يظهر تنبيه داخل البرنامج، ويمكن إرسال إشعار سطح المكتب بعد السماح للمتصفح بذلك. يجب إبقاء البرنامج مفتوحاً حتى يعمل التنبيه في الوقت المحدد.</p>
+                </div>`;
+        }
+
+        function resetReminderForm() {
+            activeReminderId = null;
+            renderNotesCalendar(document.getElementById('app-content'));
+            const title = document.getElementById('cal-reminder-title');
+            if (title) title.focus();
+        }
+
+        function editCalendarReminder(id) {
+            const reminder = appState.calendarReminders.find(item => Number(item.id) === Number(id));
+            if (!reminder) return;
+            activeReminderId = reminder.id;
+            selectedCalendarDate = reminder.date;
+            const d = dateFromLocalKey(reminder.date);
+            calendarCursor = new Date(d.getFullYear(), d.getMonth(), 1);
+            renderNotesCalendar(document.getElementById('app-content'));
+        }
+
+        async function saveCalendarReminder() {
+            const title = ((document.getElementById('cal-reminder-title') || {}).value || '').trim();
+            const note = ((document.getElementById('cal-reminder-note') || {}).value || '').trim();
+            const time = (document.getElementById('cal-reminder-time') || {}).value || '09:00';
+            const alertEnabled = !!((document.getElementById('cal-reminder-alert') || {}).checked);
+            if (!title && !note) { showToast('اكتب عنوان التذكير أو ملاحظته أولاً', 'error'); return; }
+            if (alertEnabled && 'Notification' in window && Notification.permission === 'default') {
+                try { await Notification.requestPermission(); } catch (error) { console.warn('Notification permission request failed:', error); }
+            }
+            const now = Date.now();
+            let reminder = appState.calendarReminders.find(item => Number(item.id) === Number(activeReminderId));
+            if (reminder) {
+                reminder.date = selectedCalendarDate;
+                reminder.title = title || 'تذكير';
+                reminder.note = note;
+                reminder.time = time;
+                reminder.alertEnabled = alertEnabled;
+                reminder.notified = false;
+                reminder.updatedAt = now;
+            } else {
+                reminder = { id: now + Math.floor(Math.random() * 10000), date: selectedCalendarDate, title: title || 'تذكير', note, time, alertEnabled, notified: false, createdAt: now, updatedAt: now };
+                appState.calendarReminders.push(reminder);
+                activeReminderId = reminder.id;
             }
             persistLocalState();
-            closeModal();
-            updateStatsBar();
-            renderGradesContent();
-            showToast('تم حفظ الدرجة وحساب المجاميع تلقائياً');
+            renderNotesCalendar(document.getElementById('app-content'));
+            if (alertEnabled && 'Notification' in window && Notification.permission !== 'granted') {
+                showToast('حُفظ التذكير؛ السماح بإشعارات المتصفح غير متاح حالياً. سيظهر تنبيه داخل البرنامج ما دام مفتوحاً', 'error');
+            } else {
+                showToast('تم حفظ التذكير بنجاح');
+            }
         }
 
-        function openGradeDetailsModal(studentId) {
-            const student = appState.students.find(item => String(item.id) === String(studentId));
-            if (!student) { showToast('لم يتم العثور على الطالب', 'error'); return; }
-            const subject = getDefaultStudentGradeSubject(student);
-            const record = getStudentGradeRecord(student, subject, false);
-            const monthCell = (prefix, n) => {
-                const value = getMonthlyMark(record, prefix, n);
-                return `<td class="border border-slate-200 p-2 text-center font-bold">${value === null ? '—' : `${gradeDisplay(value)} /100`}</td>`;
-            };
-            const annual = getAnnualWorkMark(student, subject), final = getFinalResultMark(student, subject);
-            const details = `<div class="space-y-3"><div class="rounded-2xl bg-slate-50 p-3 border border-slate-100"><p class="text-sm font-black text-slate-800">${escapeHtml(student.name)}</p><p class="text-[10px] text-slate-500 mt-1">${escapeHtml(student.class || '')} • شعبة ${escapeHtml(student.section || '—')} • ${escapeHtml(subject === 'all' ? 'المادة غير محددة' : subject)}</p></div>
-                <div class="overflow-x-auto rounded-xl"><table class="w-full text-[10px] border-collapse"><thead><tr class="bg-slate-900 text-amber-300"><th class="p-2">الفترة</th><th class="p-2">الشهر الأول</th><th class="p-2">الشهر الثاني</th><th class="p-2">الشهر الثالث</th><th class="p-2">المعدل</th></tr></thead><tbody>
-                    <tr><td class="border border-slate-200 p-2 font-bold">الفصل الأول</td>${monthCell('term1',1)}${monthCell('term1',2)}${monthCell('term1',3)}<td class="border border-slate-200 p-2 text-center font-black text-indigo-700">${gradeDisplay(getTerm1Mark(student,subject))}</td></tr>
-                    <tr><td class="border border-slate-200 p-2 font-bold">الفصل الثاني</td>${monthCell('term2',1)}${monthCell('term2',2)}${monthCell('term2',3)}<td class="border border-slate-200 p-2 text-center font-black text-sky-700">${gradeDisplay(getTerm2Mark(student,subject))}</td></tr>
-                </tbody></table></div>
-                <div class="grid grid-cols-2 gap-2">${gradeMetric('نصف السنة',getMidyearMark(student,subject),'sky')}${gradeMetric('السعي السنوي',annual,'amber')}${gradeMetric('الامتحان النهائي',gradeNumber(record.finalExam),'violet')}${gradeMetric('النتيجة النهائية',final,'emerald')}</div>
-                <p class="text-[9px] text-slate-400 leading-relaxed">يُحتسب معدل كل فصل عند اكتمال الأشهر المطلوبة (${isThirdMonthRequired() ? 'الثلاثة' : 'الأول والثاني'}). السعي السنوي = (الفصل الأول + نصف السنة + الفصل الثاني) ÷ 3، والنتيجة النهائية = (السعي السنوي + الامتحان النهائي) ÷ 2.</p></div>`;
-            currentModalType = 'grade_details';
-            showGradeModal('تفاصيل درجات الطالب', 'fa-rectangle-list', details, false);
+        function deleteCalendarReminder(id) {
+            if (!confirm('هل تريد حذف هذا التذكير؟')) return;
+            appState.calendarReminders = appState.calendarReminders.filter(item => Number(item.id) !== Number(id));
+            activeReminderId = null;
+            persistLocalState();
+            renderNotesCalendar(document.getElementById('app-content'));
+            showToast('تم حذف التذكير');
         }
 
-        function openGradesReports() {
-            switchTab(6);
-            if (typeof switchReportCategory === 'function') switchReportCategory('grades');
-        }
-
-        function exportGradesCSV() {
-            const students = getGradeFilteredStudents();
-            const headers = ['اسم الطالب','الصف','الشعبة','نوع الدراسة','المادة','الفصل الأول - شهر 1','الفصل الأول - شهر 2','الفصل الأول - شهر 3','معدل الفصل الأول','نصف السنة','الفصل الثاني - شهر 1','الفصل الثاني - شهر 2','الفصل الثاني - شهر 3','معدل الفصل الثاني','السعي السنوي','الامتحان النهائي','النتيجة النهائية','الحالة'];
-            const rows = students.map(student => {
-                const subject = getDefaultStudentGradeSubject(student);
-                const record = getStudentGradeRecord(student, subject, false);
-                const t1 = getTerm1Mark(student, subject), mid = getMidyearMark(student, subject), t2 = getTerm2Mark(student, subject);
-                const annual = getAnnualWorkMark(student, subject), result = getFinalResultMark(student, subject);
-                return [student.name,student.class,student.section,student.studyType,subject === 'all' ? (student.subject || '') : subject,t1 === null ? '' : gradeDisplay(t1),mid === null ? '' : gradeDisplay(mid),t2 === null ? '' : gradeDisplay(t2),annual === null ? '' : gradeDisplay(annual),gradeNumber(record.finalExam) === null ? '' : gradeDisplay(record.finalExam),result === null ? '' : gradeDisplay(result),result === null ? 'غير مكتمل' : result >= 50 ? 'ناجح' : 'راسب'];
+        function checkDueCalendarReminders() {
+            if (!Array.isArray(appState.calendarReminders)) return;
+            const now = Date.now();
+            let changed = false;
+            let toastShown = false;
+            appState.calendarReminders.forEach(reminder => {
+                if (!reminder || reminder.notified || reminder.alertEnabled === false) return;
+                const dueAt = new Date(`${reminder.date}T${reminder.time || '09:00'}:00`).getTime();
+                if (!Number.isFinite(dueAt) || dueAt > now) return;
+                // Skip stale reminders older than 24 hours so opening the program doesn't produce old alerts.
+                if (now - dueAt > 24 * 60 * 60 * 1000) {
+                    reminder.notified = true;
+                    changed = true;
+                    return;
+                }
+                reminder.notified = true;
+                reminder.notifiedAt = now;
+                changed = true;
+                const notificationBody = String(reminder.note || `موعد التذكير: ${reminder.time || '09:00'}`).slice(0, 220);
+                if ('Notification' in window && Notification.permission === 'granted') {
+                    try { new Notification(reminder.title || 'تذكير من التقويم', { body: notificationBody, tag: `school-reminder-${reminder.id}` }); } catch (error) { console.warn('Desktop notification failed:', error); }
+                }
+                if (!toastShown) {
+                    showToast(`تذكير: ${reminder.title || notificationBody}`, 'success');
+                    toastShown = true;
+                }
             });
-            const quote = value => `"${String(value == null ? '' : value).replace(/"/g, '""')}"`;
-            const csv = '\ufeff' + [headers, ...rows].map(row => row.map(quote).join(',')).join('\r\n');
-            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-            const url = URL.createObjectURL(blob);
-            const anchor = document.createElement('a');
-            anchor.href = url;
-            anchor.download = `grades_report_${new Date().toISOString().slice(0,10)}.csv`;
-            document.body.appendChild(anchor); anchor.click(); anchor.remove();
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
-            showToast(`تم تصدير درجات ${rows.length} طالباً إلى CSV`);
+            if (changed) persistLocalState();
         }
 
         // --- Subject-aware report filters (used by all report categories) ---
@@ -3306,8 +3737,8 @@
                 else if (termType === 'midyear') values = [gradeDisplay(getMidyearMark(student))];
                 else if (termType === 't2') values = [gradeDisplay(getTerm2Mark(student))];
                 else if (termType === 'annual') values = [gradeDisplay(getAnnualWorkMark(student))];
-                else if (termType === 'final') values = [gradeDisplay(gradeNumber(getStudentGradeRecord(student).finalExam) || 0)];
-                else { const result = getFinalResultMark(student); values = [gradeDisplay(result), result >= 50 ? 'ناجح' : 'راسب']; }
+                else if (termType === 'final') values = [gradeDisplay(gradeNumber(getStudentGradeRecord(student, getGradeSubjectContext(student), false).finalExam))];
+                else { const result = getFinalResultMark(student); values = [gradeDisplay(result), result === null ? 'غير مكتملة' : (result >= 50 ? 'ناجح' : 'راسب')]; }
                 return `<tr class="border-b border-slate-100 text-[11px]"><td class="p-2 text-center font-bold">${index + 1}</td><td class="p-2 font-bold text-slate-800">${escapeHtml(student.name)}</td>${values.map((value, index) => `<td class="p-2 text-center font-black ${index === 0 ? 'text-indigo-700' : ''}">${escapeHtml(value)}</td>`).join('')}</tr>`;
             }).join('');
             document.getElementById('term-grades-report-body').innerHTML = rows || '<tr><td colspan="4" class="p-3 text-center text-xs text-slate-400">لا يوجد طلبة</td></tr>';
@@ -3460,11 +3891,12 @@
             filtered = sortStudentsAlphabetically(filterStudentsForReportSubject(filtered));
             const rows = filtered.map((student, index) => {
                 const t1 = getTerm1Mark(student), mid = getMidyearMark(student), t2 = getTerm2Mark(student), annual = getAnnualWorkMark(student);
-                const finalMark = gradeNumber(getStudentGradeRecord(student).finalExam), result = getFinalResultMark(student), passed = result !== null && result >= 50, incomplete = result === null;
-                const statusText = incomplete ? 'غير مكتمل' : passed ? 'ناجح' : 'راسب';
-                const statusClass = incomplete ? 'bg-slate-100 text-slate-600' : passed ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800';
-                const resultClass = incomplete ? 'text-slate-500' : passed ? 'text-emerald-700' : 'text-rose-700';
-                return `<tr class="border-b border-slate-100 text-[10px]"><td class="p-1.5 text-center font-bold">${index + 1}</td><td class="p-1.5 font-bold text-slate-800">${escapeHtml(student.name)}</td><td class="p-1.5 text-center text-indigo-700">${gradeDisplay(t1)}</td><td class="p-1.5 text-center text-violet-700">${gradeDisplay(mid)}</td><td class="p-1.5 text-center text-sky-700">${gradeDisplay(t2)}</td><td class="p-1.5 text-center text-amber-700">${gradeDisplay(annual)}</td><td class="p-1.5 text-center text-purple-700">${gradeDisplay(finalMark)}</td><td class="p-1.5 text-center font-black ${resultClass}">${gradeDisplay(result)}</td><td class="p-1.5 text-center"><span class="px-2 py-0.5 rounded-full font-black text-[9px] ${statusClass}">${statusText}</span></td></tr>`;
+                const finalExam = gradeNumber(getStudentGradeRecord(student, getGradeSubjectContext(student), false).finalExam), result = getFinalResultMark(student);
+                const complete = result !== null, passed = complete && result >= 50;
+                const statusLabel = !complete ? 'غير مكتملة' : passed ? 'ناجح' : 'راسب';
+                const statusClass = !complete ? 'bg-slate-100 text-slate-600' : passed ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800';
+                const resultClass = !complete ? 'text-slate-500' : passed ? 'text-emerald-700' : 'text-rose-700';
+                return `<tr class="border-b border-slate-100 text-[10px]"><td class="p-1.5 text-center font-bold">${index + 1}</td><td class="p-1.5 font-bold text-slate-800">${escapeHtml(student.name)}</td><td class="p-1.5 text-center text-indigo-700">${gradeDisplay(t1)}</td><td class="p-1.5 text-center text-violet-700">${gradeDisplay(mid)}</td><td class="p-1.5 text-center text-sky-700">${gradeDisplay(t2)}</td><td class="p-1.5 text-center text-amber-700">${gradeDisplay(annual)}</td><td class="p-1.5 text-center text-purple-700">${gradeDisplay(finalExam)}</td><td class="p-1.5 text-center font-black ${resultClass}">${gradeDisplay(result)}</td><td class="p-1.5 text-center"><span class="px-2 py-0.5 rounded-full font-black text-[9px] ${statusClass}">${statusLabel}</span></td></tr>`;
             }).join('');
             const tableHead = document.querySelector('#grades-sec-report-body')?.parentElement?.querySelector('thead tr');
             if (tableHead) tableHead.innerHTML = '<th class="p-1.5 text-center">#</th><th class="p-1.5">اسم الطالب</th><th>الفصل الأول</th><th>نصف السنة</th><th>الفصل الثاني</th><th>السعي السنوي</th><th>النهائي</th><th>النتيجة</th><th>الحالة</th>';
@@ -3500,7 +3932,7 @@
                 t2: getTerm2Mark(student),
                 annual: getAnnualWorkMark(student),
                 total: getFinalResultMark(student)
-            })).filter(item => item.total !== null && item.total !== undefined).sort((a, b) => b.total - a.total || String(a.student.name || '').localeCompare(String(b.student.name || ''), 'ar'));
+            })).filter(item => item.total !== null).sort((a, b) => b.total - a.total || String(a.student.name || '').localeCompare(String(b.student.name || ''), 'ar'));
 
             const highest = totals[0];
             const lowest = totals.length ? totals[totals.length - 1] : null;
@@ -3534,7 +3966,7 @@
             const searchKey = getSearchKeyword();
             let passed = appState.students.filter(s => {
                 let tot = getFinalResultMark(s);
-                return tot !== null && tot !== undefined && tot >= 50 && (!searchKey || s.name.toLowerCase().includes(searchKey));
+                return tot !== null && tot >= 50 && (!searchKey || s.name.toLowerCase().includes(searchKey));
             });
             passed = filterStudentsForReportSubject(passed);
             passed = sortStudentsAlphabetically(passed);
@@ -3559,7 +3991,7 @@
             const searchKey = getSearchKeyword();
             let failed = appState.students.filter(s => {
                 let tot = getFinalResultMark(s);
-                return tot !== null && tot !== undefined && tot < 50 && (!searchKey || s.name.toLowerCase().includes(searchKey));
+                return tot !== null && tot < 50 && (!searchKey || s.name.toLowerCase().includes(searchKey));
             });
             failed = filterStudentsForReportSubject(failed);
             failed = sortStudentsAlphabetically(failed);
@@ -4641,7 +5073,7 @@
 
         function closeModal() {
             const modalSubmit = document.getElementById('modal-submit-btn');
-            if (modalSubmit) { modalSubmit.style.display = ''; const submitText = modalSubmit.querySelector('span'); if (submitText) submitText.innerText = 'تأكيد الحفظ'; }
+            if (modalSubmit) modalSubmit.style.display = '';
             const modal = document.getElementById('action-modal');
             const box = document.getElementById('modal-box');
             modal.classList.add('opacity-0', 'pointer-events-none');
@@ -4651,7 +5083,6 @@
         }
 
         function handleModalSubmit() {
-            if (currentModalType === 'grade_edit') { saveGradeModal(); return; }
             if (currentModalType === 'add_class') {
                 const name = document.getElementById('inp-class-name').value.trim();
                 const section = document.getElementById('inp-class-section').value.trim();
@@ -4682,8 +5113,8 @@
                     whatsapp: String((document.getElementById('inp-std-whatsapp') || {}).value || '').trim(),
                     behavior: "جديد",
                     note: "طالب مسجل حديثًا",
-                    term1Month1: "", term1Month2: "", term1Month3: "", monthDetails: {},
-                    midyearMode: "direct", midyearDirect: "", midyearWritten: "", midyearOral: "", midyearMonth1: "", midyearMonth2: "",
+                    term1Month1: "", term1Month2: "", term1Month3: "",
+                    midyearDirect: "",
                     term2Month1: "", term2Month2: "", term2Month3: "", finalExam: "",
                     attendanceCount: 0, 
                     absenceCount: 0,
@@ -4773,8 +5204,8 @@
                         year: appState.schoolInfo.year,
                         behavior: "مميز",
                         note: "مستورد",
-                        term1Month1: "", term1Month2: "", term1Month3: "", monthDetails: {},
-                        midyearMode: "direct", midyearDirect: "", midyearWritten: "", midyearOral: "", midyearMonth1: "", midyearMonth2: "",
+                        term1Month1: "", term1Month2: "", term1Month3: "",
+                        midyearDirect: "",
                         term2Month1: "", term2Month2: "", term2Month3: "", finalExam: "",
                         attendanceCount: 0, absenceCount: 0, excusedCount: 0,
                         absenceLog: [],
@@ -4874,6 +5305,8 @@
             // Persist migrated data locally; this program no longer connects to cloud databases or Google accounts.
             persistLocalState();
             switchTab(1);
+            checkDueCalendarReminders();
+            window.setInterval(checkDueCalendarReminders, 15000);
         };
     </script>
 </body>
