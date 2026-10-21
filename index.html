@@ -1910,6 +1910,7 @@
             for (const prefix of ['term1', 'term2']) {
                 for (let month = 1; month <= 3; month++) {
                     MONTHLY_GRADE_COMPONENTS.forEach(component => keys.push(`${prefix}Month${month}${component.key}`));
+                    keys.push(`${prefix}Month${month}DailyEvaluation`);
                 }
             }
             return keys.some(key => record[key] !== '' && record[key] !== null && record[key] !== undefined && Number.isFinite(Number(record[key])));
@@ -1967,9 +1968,10 @@
                 term2Month1: '', term2Month2: '', term2Month3: '', finalExam: ''
             };
             ['term1', 'term2'].forEach(prefix => {
-                [1, 2, 3].forEach(month => MONTHLY_GRADE_COMPONENTS.forEach(component => {
-                    record[`${prefix}Month${month}${component.key}`] = '';
-                }));
+                [1, 2, 3].forEach(month => {
+                    MONTHLY_GRADE_COMPONENTS.forEach(component => { record[`${prefix}Month${month}${component.key}`] = ''; });
+                    record[`${prefix}Month${month}DailyEvaluation`] = '';
+                });
             });
             return record;
         }
@@ -2012,12 +2014,24 @@
 
         function getMonthlyBreakdown(record, prefix, month) {
             const values = MONTHLY_GRADE_COMPONENTS.map(component => gradeNumber(record[`${prefix}Month${month}${component.key}`]));
-            const hasAny = values.some(value => value !== null);
-            const complete = values.every(value => value !== null);
+            const componentHasAny = values.some(value => value !== null);
+            const componentsComplete = values.every(value => value !== null);
+            const dailyEvaluation = gradeNumber(record[`${prefix}Month${month}DailyEvaluation`]);
+            const hasAny = componentHasAny || dailyEvaluation !== null;
+            // الشهر لا يكتمل إلا بإدخال المكونات الستة وتقييم اليومي من 100.
+            const complete = componentsComplete && dailyEvaluation !== null;
+            const dailyValues = values.slice(0, 3);   // حضور 10 + نشاط 5 + سلوك 5 = 20
+            const paperValues = values.slice(3, 6);  // قواعد 30 + أدب 30 + إنشاء 20 = 80
+            const dailyComplete = dailyValues.every(value => value !== null);
+            const paperComplete = paperValues.every(value => value !== null);
+            const dailyTotal = dailyComplete ? dailyValues.reduce((sum, value) => sum + value, 0) : null;
+            const paperTotal = paperComplete ? paperValues.reduce((sum, value) => sum + value, 0) : null;
+            const componentTotal = componentsComplete ? dailyTotal + paperTotal : null;
             const storedTotal = gradeNumber(record[`${prefix}Month${month}`]);
-            // Keep old aggregate scores visible, but don't consider them complete until their components are entered.
-            const total = hasAny ? values.reduce((sum, value) => sum + (value === null ? 0 : value), 0) : storedTotal;
-            return { values, hasAny, complete, total, storedTotal };
+            // درجة الشهر = (مجموع المكونات الستة من 100 + تقييم اليومي من 100) ÷ 2.
+            // تبقى الدرجة القديمة مرئية فقط عندما لا توجد تفاصيل جديدة، لكنها لا تُعتمد في معدل الفصل.
+            const total = complete ? (componentTotal + dailyEvaluation) / 2 : (!hasAny ? storedTotal : null);
+            return { values, hasAny, complete, componentsComplete, dailyComplete, paperComplete, dailyTotal, paperTotal, componentTotal, dailyEvaluation, total, storedTotal };
         }
 
         function getMonthlyAverage(record, prefix, subjectName = getGradeSubjectContext()) {
@@ -2219,10 +2233,15 @@
                     const value = gradeInputValue(record[`${prefix}Month${month}${component.key}`], component.max);
                     return `<td class="grade-data-cell text-center align-middle"><input type="number" min="0" max="${component.max}" step="1" inputmode="numeric" oninput="sanitizeGradeInteger(this, ${component.max})" id="grade-${prefix}-m${month}-${component.key}-${student.id}" value="${value}" aria-label="${component.label} للطالب ${escapeHtml(student.name)}" class="grade-cell-input font-bold text-[11px] text-slate-800" title="${component.label} (من ${component.max})"></td>`;
                 }).join('');
+                const evalValue = gradeInputValue(record[`${prefix}Month${month}DailyEvaluation`], 100);
+                const dailyEvaluationInput = `<td class="grade-data-cell text-center align-middle"><input type="number" min="0" max="100" step="1" inputmode="numeric" oninput="sanitizeGradeInteger(this, 100)" id="grade-${prefix}-m${month}-DailyEvaluation-${student.id}" value="${evalValue}" aria-label="تقييم اليومي للطالب ${escapeHtml(student.name)} من 100" class="grade-cell-input font-bold text-[11px] text-indigo-900" title="تقييم اليومي من 100"></td>`;
                 return `<tr class="border-b border-slate-100 text-[11px] align-middle">
                     <td class="grade-number-sticky p-2 text-center font-bold">${index + 1}</td>
                     <td class="grade-student-sticky p-2 font-bold text-slate-800 whitespace-nowrap">${escapeHtml(student.name)}</td>
                     ${inputs}
+                    ${dailyEvaluationInput}
+                    <td class="p-2 text-center font-black text-sky-700 whitespace-nowrap">${breakdown.dailyComplete ? `${gradeDisplay(breakdown.dailyTotal)} / 20` : '—'}</td>
+                    <td class="p-2 text-center font-black text-violet-700 whitespace-nowrap">${breakdown.paperComplete ? `${gradeDisplay(breakdown.paperTotal)} / 80` : '—'}</td>
                     <td class="p-2 text-center font-black text-indigo-800 whitespace-nowrap">${breakdown.complete ? `${gradeDisplay(breakdown.total)} / 100` : '—'}</td>
                 </tr>`;
             }).join('');
@@ -2249,7 +2268,8 @@
                 const monthLabel = ['الأول', 'الثاني', 'الثالث'][activeGradeMonth - 1];
                 const rows = renderMonthlyGradeRows(filtered, prefix, activeGradeMonth);
                 const componentHeaders = MONTHLY_GRADE_COMPONENTS.map(component => `${component.label} / ${component.max}`);
-                const table = gradeTableCard(`${label} - الشهر ${monthLabel}`, '', [...nameCols, ...componentHeaders, 'درجة الشهر / 100'], rows, prefix === 'term1' ? 'saveTerm1Grades' : 'saveTerm2Grades');
+                const monthFormula = 'درجة الشهر = (مجموع الحضور والنشاط والسلوك والقواعد والأدب والإنشاء من 100 + تقييم اليومي من 100) ÷ 2 = 100.';
+                const table = gradeTableCard(`${label} - الشهر ${monthLabel}`, monthFormula, [...nameCols, ...componentHeaders, 'تقييم اليومي / 100', 'مجموع اليومي / 20', 'مجموع الورقة / 80', 'درجة الشهر / 100'], rows, prefix === 'term1' ? 'saveTerm1Grades' : 'saveTerm2Grades');
                 container.innerHTML = renderGradeMonthTabs(prefix) + table;
                 return;
             }
@@ -2300,23 +2320,27 @@
                     const input = document.getElementById(`grade-${prefix}-m${month}-${component.key}-${student.id}`);
                     return { component, value: readGradeIntegerInput(input, component.max) };
                 });
-                const hasInput = entered.some(item => item.value !== '');
-                const hadSavedComponents = MONTHLY_GRADE_COMPONENTS.some(component => gradeNumber(record[`${prefix}Month${month}${component.key}`]) !== null);
+                const evaluationInput = document.getElementById(`grade-${prefix}-m${month}-DailyEvaluation-${student.id}`);
+                const dailyEvaluation = readGradeIntegerInput(evaluationInput, 100);
+                const hasInput = entered.some(item => item.value !== '') || dailyEvaluation !== '';
+                const hadSavedComponents = MONTHLY_GRADE_COMPONENTS.some(component => gradeNumber(record[`${prefix}Month${month}${component.key}`]) !== null) || gradeNumber(record[`${prefix}Month${month}DailyEvaluation`]) !== null;
                 entered.forEach(item => {
-                    const field = `${prefix}Month${month}${item.component.key}`;
-                    record[field] = item.value === '' ? '' : item.value;
+                    record[`${prefix}Month${month}${item.component.key}`] = item.value === '' ? '' : item.value;
                 });
+                record[`${prefix}Month${month}DailyEvaluation`] = dailyEvaluation === '' ? '' : dailyEvaluation;
                 if (hasInput) {
-                    const allEntered = entered.every(item => item.value !== '');
-                    record[`${prefix}Month${month}`] = allEntered ? entered.reduce((sum, item) => sum + item.value, 0) : '';
+                    const allComponentsEntered = entered.every(item => item.value !== '');
+                    record[`${prefix}Month${month}`] = allComponentsEntered && dailyEvaluation !== ''
+                        ? (entered.reduce((sum, item) => sum + item.value, 0) + dailyEvaluation) / 2
+                        : '';
                 } else if (hadSavedComponents) {
-                    // The user cleared all previously saved components.
+                    // تم مسح جميع المكونات وتقييم اليومي المحفوظة سابقاً.
                     record[`${prefix}Month${month}`] = '';
                 }
             });
             persistLocalState();
             renderGradesContent();
-            showToast(prefix === 'term1' ? 'تم حفظ درجات الشهر للفصل الأول' : 'تم حفظ درجات الشهر للفصل الثاني');
+            showToast(prefix === 'term1' ? 'تم حفظ درجات الشهر وتقييم اليومي للفصل الأول' : 'تم حفظ درجات الشهر وتقييم اليومي للفصل الثاني');
         }
 
         function saveTerm1Grades() { saveMonthlyGrades('term1'); }
