@@ -1647,7 +1647,7 @@
                                 </select>
                             </div>
                         </div>
-                        <p class="text-[10px] text-slate-500 font-semibold">درجة الحضور من 10 تُحسب تلقائياً حسب الحضور والغياب في الفصل والشهر المحددين.</p>
+                        <p class="text-[10px] text-slate-500 font-semibold">درجة الحضور من 10: تُخصم درجتان عن كل غياب، وتصبح صفراً عند 5 غيابات أو أكثر، بغضّ النظر عن عدد مرات الحضور؛ ويُحسب ذلك للفصل والشهر المحددين.</p>
                         <div>
                             <label class="block text-[10px] font-extrabold text-slate-600 mb-1">المادة الدراسية:</label>
                             <select id="att-subject-select" onchange="clearAttendancePreview()" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold text-slate-700 outline-none focus:border-slate-900">
@@ -2013,8 +2013,12 @@
                 else if (status === 'absent') absentCount++;
                 // المجاز لا ينقص درجة الحضور ولا يدخل في مقام نسبة الحضور.
             });
-            const counted = presentCount + absentCount;
-            const score = counted > 0 ? Math.min(10, Math.max(0, Math.ceil((presentCount / counted) * 10))) : null;
+            // درجة الحضور تُحسب من عدد الغيابات فقط: خصم درجتين لكل غياب،
+            // وعند 5 غيابات أو أكثر تصبح الدرجة صفراً مهما كان عدد مرات الحضور.
+            // تبقى الدرجة فارغة إذا لم توجد أي جلسة مرتبطة بهذا الفصل والشهر والمادة.
+            const score = sessionCount > 0
+                ? (absentCount >= 5 ? 0 : Math.max(0, Math.min(10, 10 - (absentCount * 2))))
+                : null;
             return { sessionCount, presentCount, absentCount, score };
         }
 
@@ -2375,7 +2379,7 @@
                     if (component.key === 'Attendance') {
                         value = getLinkedAttendanceGrade(student, prefix, month, subjectContext, record[`${prefix}Month${month}Attendance`]);
                         const displayValue = value === '' ? '' : gradeInputValue(value, 10);
-                        return `<td class="grade-data-cell text-center align-middle"><input type="number" min="0" max="10" step="1" inputmode="numeric" readonly aria-readonly="true" id="grade-${prefix}-m${month}-${component.key}-${student.id}" value="${displayValue}" aria-label="درجة الحضور المحسوبة للطالب ${escapeHtml(student.name)} من 10" class="grade-cell-input font-bold text-[11px] text-emerald-800 bg-emerald-50 cursor-not-allowed" title="تُحسب تلقائياً من جلسات الحضور المرتبطة بالفصل والشهر المحددين (من 10)"></td>`;
+                        return `<td class="grade-data-cell text-center align-middle"><input type="number" min="0" max="10" step="1" inputmode="numeric" readonly aria-readonly="true" id="grade-${prefix}-m${month}-${component.key}-${student.id}" value="${displayValue}" aria-label="درجة الحضور المحسوبة للطالب ${escapeHtml(student.name)} من 10" class="grade-cell-input font-bold text-[11px] text-emerald-800 bg-emerald-50 cursor-not-allowed" title="تُحسب من عدد الغيابات في الفصل والشهر المحددين: خصم درجتين لكل غياب وصفر عند 5 غيابات أو أكثر (من 10)"></td>`;
                     }
                     return `<td class="grade-data-cell text-center align-middle"><input type="number" min="0" max="${component.max}" step="1" inputmode="numeric" oninput="sanitizeGradeInteger(this, ${component.max})" id="grade-${prefix}-m${month}-${component.key}-${student.id}" value="${value}" aria-label="${component.label} للطالب ${escapeHtml(student.name)}" class="grade-cell-input font-bold text-[11px] text-slate-800" title="${component.label} (من ${component.max})"></td>`;
                 }).join('');
