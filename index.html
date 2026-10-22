@@ -70,6 +70,15 @@
             white-space: nowrap;
         }
         .calendar-day-btn { min-height: 38px; }
+
+        /* شاشة رمز الدخول: تُحجب واجهة المنظومة إلى أن يُدخل الرمز الصحيح. */
+        .app-locked #main-app-container,
+        .app-locked #action-modal,
+        .app-locked #toast { display: none !important; }
+        #login-gate { display: flex; }
+        #login-gate.login-gate-hidden { display: none !important; }
+        #login-code-input { letter-spacing: .35em; }
+        @media print { #login-gate { display: none !important; } }
         
         /* Official Professional Printable Sheet Styling */
         @media print {
@@ -299,7 +308,7 @@
         .grade-entry-table select { cursor: pointer; }
     </style>
 </head>
-<body class="flex items-center justify-center min-h-screen m-0 p-0 sm:py-6 bg-slate-950">
+<body class="app-locked flex items-center justify-center min-h-screen m-0 p-0 sm:py-6 bg-slate-950">
 
     <!-- App Container -->
     <div id="main-app-container" class="w-full sm:max-w-[430px] h-screen sm:h-[880px] bg-slate-50 sm:rounded-[44px] shadow-2xl flex flex-col justify-between relative overflow-hidden border-0 sm:border-[8px] sm:border-slate-800">
@@ -322,9 +331,9 @@
                     </div>
                 </div>
 
-                <div id="local-status-badge" class="text-[10px] bg-emerald-500/15 border border-emerald-500/30 px-3 py-1 rounded-full text-emerald-300 font-bold backdrop-blur-md flex items-center gap-1.5 shadow-sm transition-all duration-300">
-                    <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
-                    <span>حفظ محلي</span>
+                <div id="local-status-badge" class="text-[10px] bg-emerald-500/15 border border-emerald-500/30 px-3 py-1 rounded-full text-emerald-300 font-bold backdrop-blur-md flex items-center gap-1.5 shadow-sm transition-all duration-300" title="حالة الاتصال بقاعدة بيانات Supabase">
+                    <span id="cloud-status-dot" class="w-2 h-2 rounded-full bg-sky-400"></span>
+                    <span id="cloud-status-text">اتصال سحابي...</span>
                 </div>
             </div>
 
@@ -415,6 +424,20 @@
                 </div>
                 <span class="text-[8px] sm:text-[9px] font-bold mt-0.5 truncate w-full text-center transition-colors">الملاحظات</span>
             </button>
+        </div>
+    </div>
+
+    <!-- Login Gate: default access code is 0011; only the code is requested. -->
+    <div id="login-gate" class="fixed inset-0 z-[100] items-center justify-center p-5 bg-slate-950" role="dialog" aria-modal="true" aria-labelledby="login-gate-title">
+        <div class="w-full max-w-sm rounded-[32px] bg-white p-6 shadow-2xl border border-slate-200 text-center">
+            <div class="mx-auto mb-4 w-14 h-14 rounded-2xl bg-slate-900 text-amber-400 flex items-center justify-center text-2xl shadow-lg"><i class="fa-solid fa-lock"></i></div>
+            <h2 id="login-gate-title" class="text-lg font-black text-slate-900">تسجيل الدخول</h2>
+            <p class="text-xs text-slate-500 mt-1 mb-5">أدخل رمز الدخول للمتابعة</p>
+            <form onsubmit="event.preventDefault(); attemptLogin();" class="space-y-3">
+                <input id="login-code-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="current-password" aria-label="رمز الدخول" placeholder="••••" class="w-full rounded-2xl border-2 border-slate-200 bg-slate-50 px-4 py-3 text-center text-2xl font-black tracking-widest outline-none focus:border-amber-400" dir="ltr" required>
+                <p id="login-error" class="hidden text-[11px] font-bold text-rose-600" role="alert">رمز الدخول غير صحيح، حاول مرة أخرى.</p>
+                <button type="submit" class="w-full rounded-2xl bg-slate-900 text-amber-400 py-3 font-black text-sm shadow-lg hover:bg-slate-800 transition-colors">دخول</button>
+            </form>
         </div>
     </div>
 
@@ -1056,18 +1079,176 @@
             return inp ? inp.value.trim().toLowerCase() : '';
         }
 
-        // --- Local-only persistence: no external cloud account connection ---
-        function persistLocalState() {
+        // --- Supabase cloud persistence with local fallback ---
+        // Publishable keys are intended for browser clients. Access is still controlled by RLS policies.
+        const SUPABASE_REST_URL = 'https://mdohzndagjebuibgntkd.supabase.co/rest/v1/';
+        const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_6snn1Vmq10lqEBZBF4X9XQ_jRdInvnZ';
+        // This ID represents this app's shared cloud state row in app_state.
+        const SUPABASE_STATE_ID = 'school-management-main-v1';
+        let supabaseSyncTimer = null;
+        let supabaseSyncInFlight = false;
+        let supabaseSyncRequestedAgain = false;
+
+        function getSafeAppStateSnapshot() {
+            const safeState = JSON.parse(JSON.stringify(appState));
+            delete safeState.supabaseConfig;
+            delete safeState.googleConfig;
+            return safeState;
+        }
+
+        function setCloudBadge(message, status = 'success') {
+            const badge = document.getElementById('local-status-badge');
+            const label = document.getElementById('cloud-status-text');
+            const dot = document.getElementById('cloud-status-dot');
+            if (label) label.textContent = message;
+            const palette = {
+                success: { bg: 'rgba(16,185,129,.15)', border: 'rgba(16,185,129,.3)', text: '#6ee7b7', dot: '#34d399' },
+                pending: { bg: 'rgba(245,158,11,.15)', border: 'rgba(245,158,11,.35)', text: '#fcd34d', dot: '#fbbf24' },
+                offline: { bg: 'rgba(100,116,139,.2)', border: 'rgba(148,163,184,.35)', text: '#cbd5e1', dot: '#94a3b8' },
+                error: { bg: 'rgba(244,63,94,.15)', border: 'rgba(251,113,133,.35)', text: '#fda4af', dot: '#fb7185' }
+            };
+            const colors = palette[status] || palette.success;
+            if (badge) {
+                badge.style.backgroundColor = colors.bg;
+                badge.style.borderColor = colors.border;
+                badge.style.color = colors.text;
+                badge.title = 'حالة قاعدة بيانات Supabase: ' + message;
+            }
+            if (dot) dot.style.backgroundColor = colors.dot;
+        }
+
+        function persistLocalState(options = {}) {
             try {
-                const safeState = JSON.parse(JSON.stringify(appState));
-                delete safeState.supabaseConfig;
-                delete safeState.googleConfig;
-                localStorage.setItem('sp_academic_local_data', JSON.stringify(safeState));
+                localStorage.setItem('sp_academic_local_data', JSON.stringify(getSafeAppStateSnapshot()));
+                // Record the local edit time so unsynced work can be recovered on the next launch.
+                if (options.touch !== false) {
+                    localStorage.setItem('sp_academic_local_updated_at', String(Date.now()));
+                }
             } catch (storageError) {
                 console.warn('Local storage save error:', storageError);
                 showToast('تعذر الحفظ المحلي؛ صدّر نسخة احتياطية لتجنب فقدان البيانات', 'error');
             }
+            if (options.sync !== false) scheduleSupabaseSync();
         }
+
+        function scheduleSupabaseSync() {
+            if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+                setCloudBadge('دون إنترنت · حفظ محلي', 'offline');
+                return;
+            }
+            if (supabaseSyncTimer) window.clearTimeout(supabaseSyncTimer);
+            setCloudBadge('بانتظار المزامنة السحابية', 'pending');
+            supabaseSyncTimer = window.setTimeout(() => {
+                supabaseSyncTimer = null;
+                syncSupabaseState();
+            }, 800);
+        }
+
+        async function syncSupabaseState() {
+            if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+                setCloudBadge('دون إنترنت · حفظ محلي', 'offline');
+                return;
+            }
+            if (supabaseSyncInFlight) {
+                supabaseSyncRequestedAgain = true;
+                return;
+            }
+            supabaseSyncInFlight = true;
+            const stateToSave = getSafeAppStateSnapshot();
+            const updatedAt = new Date().toISOString();
+            setCloudBadge('جارٍ حفظ البيانات سحابياً', 'pending');
+            try {
+                const response = await fetch(SUPABASE_REST_URL + 'app_state?on_conflict=id', {
+                    method: 'POST',
+                    headers: {
+                        'apikey': SUPABASE_PUBLISHABLE_KEY,
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                        'Content-Profile': 'public',
+                        'Prefer': 'resolution=merge-duplicates,return=minimal'
+                    },
+                    body: JSON.stringify({
+                        id: SUPABASE_STATE_ID,
+                        data: stateToSave,
+                        updated_at: updatedAt
+                    })
+                });
+                if (!response.ok) {
+                    const details = await response.text().catch(() => '');
+                    throw new Error('Supabase HTTP ' + response.status + (details ? ': ' + details.slice(0, 300) : ''));
+                }
+                try {
+                    const localModifiedAt = Number(localStorage.getItem('sp_academic_local_updated_at') || 0);
+                    const uploadedAtMs = Date.parse(updatedAt) || Date.now();
+                    if (localModifiedAt <= uploadedAtMs) {
+                        localStorage.setItem('sp_academic_local_updated_at', String(uploadedAtMs));
+                    }
+                } catch (timestampError) {
+                    console.warn('Could not update local cloud-sync timestamp:', timestampError);
+                }
+                setCloudBadge('تمت المزامنة السحابية', 'success');
+            } catch (error) {
+                console.error('Supabase save error:', error);
+                setCloudBadge('تعذرت المزامنة · حفظ محلي', 'error');
+            } finally {
+                supabaseSyncInFlight = false;
+                if (supabaseSyncRequestedAgain) {
+                    supabaseSyncRequestedAgain = false;
+                    scheduleSupabaseSync();
+                }
+            }
+        }
+
+        async function loadSupabaseState() {
+            setCloudBadge('جارٍ تحميل البيانات السحابية', 'pending');
+            const url = SUPABASE_REST_URL + 'app_state?id=eq.' + encodeURIComponent(SUPABASE_STATE_ID) + '&select=id,data,updated_at';
+            const response = await fetch(url, {
+                method: 'GET',
+                headers: {
+                    'apikey': SUPABASE_PUBLISHABLE_KEY,
+                    'Accept': 'application/json',
+                    'Accept-Profile': 'public',
+                    'Cache-Control': 'no-cache'
+                },
+                cache: 'no-store'
+            });
+            if (!response.ok) {
+                const details = await response.text().catch(() => '');
+                throw new Error('Supabase HTTP ' + response.status + (details ? ': ' + details.slice(0, 300) : ''));
+            }
+            const rows = await response.json();
+            const row = Array.isArray(rows) ? rows.find(item => item && item.id === SUPABASE_STATE_ID) : null;
+            if (!row || !row.data || typeof row.data !== 'object' || !Array.isArray(row.data.students) || !Array.isArray(row.data.classes)) {
+                return false;
+            }
+            const cloudUpdatedAt = Date.parse(row.updated_at || '') || 0;
+            let localUpdatedAt = 0;
+            try { localUpdatedAt = Number(localStorage.getItem('sp_academic_local_updated_at') || 0); } catch (_) {}
+
+            // Never discard local edits that were made after the last successful cloud write.
+            if (localUpdatedAt > cloudUpdatedAt) {
+                setCloudBadge('رفع آخر التعديلات المحلية', 'pending');
+                await syncSupabaseState();
+                return true;
+            }
+
+            appState = row.data;
+            normalizeAppState();
+            persistLocalState({ sync: false, touch: false });
+            try {
+                localStorage.setItem('sp_academic_local_updated_at', String(cloudUpdatedAt || Date.now()));
+            } catch (timestampError) {
+                console.warn('Could not store downloaded cloud timestamp:', timestampError);
+            }
+            setCloudBadge('تم تحميل البيانات السحابية', 'success');
+            return true;
+        }
+
+        window.addEventListener('online', () => {
+            setCloudBadge('عاد الاتصال · جارٍ تجهيز المزامنة', 'pending');
+            scheduleSupabaseSync();
+        });
+        window.addEventListener('offline', () => setCloudBadge('دون إنترنت · حفظ محلي', 'offline'));
 
         function downloadLocalBackupJSON() {
             const safeState = JSON.parse(JSON.stringify(appState));
@@ -1143,7 +1324,7 @@
             {
                 index: 0,
                 title: "الإعدادات والنظام",
-                subtitle: "إعدادات المدرس والمدرسة والنسخ الاحتياطي المحلي",
+                subtitle: "إعدادات المدرس والمدرسة والمزامنة السحابية والنسخ الاحتياطي",
                 icon: "fa-gear",
                 isSettings: true
             },
@@ -1342,6 +1523,16 @@
                                 <div>
                                     <h4 class="font-bold text-xs text-slate-800">بيانات المدرسة والمدرس والعام الدراسي</h4>
                                     <p class="text-[10px] text-slate-400">تعديل اسم المدرسة والمدرس والشعار</p>
+                                </div>
+                            </div>
+                            <i class="fa-solid fa-chevron-left text-xs text-slate-300"></i>
+                        </div>
+                        <div onclick="triggerAction('change_login_code')" class="flex items-center justify-between p-2.5 rounded-2xl hover:bg-slate-50 cursor-pointer transition-colors">
+                            <div class="flex items-center gap-3">
+                                <div class="w-9 h-9 rounded-xl bg-violet-50 text-violet-600 flex items-center justify-center text-sm"><i class="fa-solid fa-key"></i></div>
+                                <div>
+                                    <h4 class="font-bold text-xs text-slate-800">تعديل رمز الدخول</h4>
+                                    <p class="text-[10px] text-slate-400">تغيير الرمز المكوّن من أربعة أرقام المستخدم لفتح المنظومة</p>
                                 </div>
                             </div>
                             <i class="fa-solid fa-chevron-left text-xs text-slate-300"></i>
@@ -4682,6 +4873,28 @@
                         </div>
                     </div>
                 `;
+            } else if (actionKey === 'change_login_code') {
+                titleEl.innerText = "تعديل رمز الدخول";
+                iconEl.className = "fa-solid fa-key";
+                bodyEl.innerHTML = `
+                    <div class="space-y-3">
+                        <div class="rounded-2xl bg-violet-50 border border-violet-100 p-3">
+                            <p class="text-[10px] font-bold text-violet-900">أدخل الرمز الحالي ثم الرمز الجديد وتأكيده.</p>
+                            <p class="text-[9px] text-violet-700 mt-1">يجب أن يتكون رمز الدخول من أربعة أرقام.</p>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-600 mb-1">رمز الدخول الحالي:</label>
+                            <input id="login-code-current" type="password" inputmode="numeric" maxlength="4" autocomplete="current-password" placeholder="••••" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-center text-lg font-black outline-none" dir="ltr">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-600 mb-1">رمز الدخول الجديد:</label>
+                            <input id="login-code-new" type="password" inputmode="numeric" maxlength="4" autocomplete="new-password" placeholder="4 أرقام" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-center text-lg font-black outline-none" dir="ltr">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-600 mb-1">تأكيد الرمز الجديد:</label>
+                            <input id="login-code-confirm" type="password" inputmode="numeric" maxlength="4" autocomplete="new-password" placeholder="أعد إدخال الرمز" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-center text-lg font-black outline-none" dir="ltr">
+                        </div>
+                    </div>`;
             } else if (actionKey === 'backup_data') {
                 titleEl.innerText = "تصدير أو استرجاع نسخة احتياطية";
                 iconEl.className = "fa-solid fa-file-arrow-down";
@@ -5351,8 +5564,31 @@
                 if (subjectInput) appState.schoolInfo.subject = subjectInput.value.trim() || appState.schoolInfo.subject || '';
                 if (yearInput) appState.schoolInfo.year = yearInput.value.trim() || appState.schoolInfo.year || '';
 
-                // تتم الكتابة للحفظ المحلي ومزامنة الخدمات المحلية مباشرة بعد انتهاء هذا الفرع.
+                // يتم حفظ البيانات محلياً وجدولة المزامنة السحابية مباشرة بعد انتهاء هذا الفرع.
                 showToast("تم حفظ بيانات المدرسة والقسم والمدرس بنجاح");
+            } else if (currentModalType === 'change_login_code') {
+                const currentCode = String((document.getElementById('login-code-current') || {}).value || '').trim();
+                const newCode = String((document.getElementById('login-code-new') || {}).value || '').trim();
+                const confirmCode = String((document.getElementById('login-code-confirm') || {}).value || '').trim();
+                if (currentCode !== getStoredLoginCode()) {
+                    showToast('رمز الدخول الحالي غير صحيح', 'error');
+                    return;
+                }
+                if (!/^\d{4}$/.test(newCode)) {
+                    showToast('يجب أن يتكون الرمز الجديد من أربعة أرقام', 'error');
+                    return;
+                }
+                if (newCode !== confirmCode) {
+                    showToast('تأكيد الرمز الجديد غير مطابق', 'error');
+                    return;
+                }
+                try {
+                    localStorage.setItem('sp_academic_login_code', newCode);
+                } catch (error) {
+                    showToast('تعذر حفظ رمز الدخول في هذا المتصفح', 'error');
+                    return;
+                }
+                showToast('تم تغيير رمز الدخول بنجاح');
             } else {
                 showToast("تم حفظ التعديلات بنجاح");
             }
@@ -5464,12 +5700,46 @@
             }, 2000);
         }
 
-        window.onload = function() {
+        // --- Local access-code gate (default: 0011) ---
+        function getStoredLoginCode() {
+            try {
+                const savedCode = localStorage.getItem('sp_academic_login_code');
+                return /^\d{4}$/.test(String(savedCode || '')) ? String(savedCode) : '0011';
+            } catch (error) {
+                return '0011';
+            }
+        }
+
+        let loginReminderIntervalId = null;
+
+        function attemptLogin() {
+            const input = document.getElementById('login-code-input');
+            const error = document.getElementById('login-error');
+            const entered = String(input ? input.value : '').trim();
+            if (entered === getStoredLoginCode()) {
+                document.body.classList.remove('app-locked');
+                const gate = document.getElementById('login-gate');
+                if (gate) gate.classList.add('login-gate-hidden');
+                if (error) error.classList.add('hidden');
+                if (input) input.value = '';
+                // Start calendar reminder checks only after the application is unlocked.
+                checkDueCalendarReminders();
+                if (!loginReminderIntervalId) loginReminderIntervalId = window.setInterval(checkDueCalendarReminders, 15000);
+                return;
+            }
+            if (error) error.classList.remove('hidden');
+            if (input) { input.value = ''; input.focus(); }
+        }
+
+        // Keep the login code separate from student data and backups.
+        window.onload = async function() {
+            let hadLocalCache = false;
             try {
                 const cached = localStorage.getItem('sp_academic_local_data');
                 if (cached) {
                     const parsed = JSON.parse(cached);
-                    if (parsed && parsed.students) {
+                    if (parsed && parsed.students && parsed.classes) {
+                        hadLocalCache = true;
                         appState = parsed;
                         delete appState.supabaseConfig;
                         delete appState.googleConfig;
@@ -5481,11 +5751,31 @@
             }
 
             normalizeAppState();
-            // Persist migrated data locally; this program no longer connects to cloud databases or Google accounts.
-            persistLocalState();
+            // Keep a local copy immediately so the app remains usable if cloud access fails.
+            // `hadLocalCache` records whether this browser already had a local copy.
+            if (hadLocalCache) console.info('Local application cache found.');
+            persistLocalState({ sync: false, touch: false });
+            try {
+                const cloudHasData = await loadSupabaseState();
+                if (!cloudHasData) {
+                    // First connection: initialize app_state with this browser's current data.
+                    await syncSupabaseState();
+                }
+            } catch (cloudError) {
+                console.warn('Supabase initial load error; using local data:', cloudError);
+                setCloudBadge('تعذر الاتصال · حفظ محلي', 'error');
+            }
+
             switchTab(1);
-            checkDueCalendarReminders();
-            window.setInterval(checkDueCalendarReminders, 15000);
+            // Restrict code inputs to digits only, including the settings fields created dynamically.
+            document.addEventListener('input', event => {
+                const field = event.target;
+                if (field && ['login-code-input', 'login-code-current', 'login-code-new', 'login-code-confirm'].includes(field.id)) {
+                    field.value = field.value.replace(/\D/g, '').slice(0, 4);
+                }
+            });
+            const initialLoginInput = document.getElementById('login-code-input');
+            if (initialLoginInput) initialLoginInput.focus();
         };
     </script>
 </body>
