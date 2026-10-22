@@ -331,9 +331,9 @@
                     </div>
                 </div>
 
-                <div id="local-status-badge" class="text-[10px] bg-emerald-500/15 border border-emerald-500/30 px-3 py-1 rounded-full text-emerald-300 font-bold backdrop-blur-md flex items-center gap-1.5 shadow-sm transition-all duration-300" title="حالة الاتصال بقاعدة بيانات Supabase">
-                    <span id="cloud-status-dot" class="w-2 h-2 rounded-full bg-sky-400"></span>
-                    <span id="cloud-status-text">اتصال سحابي...</span>
+                <div id="local-status-badge" class="text-[10px] bg-sky-500/15 border border-sky-500/30 px-3 py-1 rounded-full text-sky-300 font-bold backdrop-blur-md flex items-center gap-1.5 shadow-sm transition-all duration-300" title="حالة الاتصال بقاعدة بيانات Supabase">
+                    <span class="w-2 h-2 rounded-full bg-sky-400"></span>
+                    <span>اتصال...</span>
                 </div>
             </div>
 
@@ -1079,15 +1079,39 @@
             return inp ? inp.value.trim().toLowerCase() : '';
         }
 
-        // --- Supabase cloud persistence with local fallback ---
-        // Publishable keys are intended for browser clients. Access is still controlled by RLS policies.
-        const SUPABASE_REST_URL = 'https://mdohzndagjebuibgntkd.supabase.co/rest/v1/';
-        const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_6snn1Vmq10lqEBZBF4X9XQ_jRdInvnZ';
-        // This ID represents this app's shared cloud state row in app_state.
-        const SUPABASE_STATE_ID = 'school-management-main-v1';
-        let supabaseSyncTimer = null;
-        let supabaseSyncInFlight = false;
-        let supabaseSyncRequestedAgain = false;
+        // --- Supabase cloud database + local safety cache ---
+        // يستخدم هذا الملف مفتاحاً عاماً publishable؛ صلاحيات البيانات تحكمها سياسات RLS في Supabase.
+        const SUPABASE_REST_URL = 'https://oxrgwefchivdxuoirnbo.supabase.co/rest/v1';
+        const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_EFyta-Y0LZ_69n8dhi95hA_NYa_HuQW';
+        const SUPABASE_BACKUP_URL = `${SUPABASE_REST_URL}/school_backup`;
+        const SUPABASE_BACKUP_ID = 'main_data';
+        let cloudReadyForWrites = false;
+        let cloudLoadStarted = false;
+        let cloudSaveTimer = null;
+        let cloudSaveInProgress = false;
+        let cloudSavePending = false;
+        let lastCloudErrorShown = false;
+
+        function setCloudStatus(state) {
+            const badge = document.getElementById('local-status-badge');
+            if (!badge) return;
+            const label = badge.querySelector('span:last-child');
+            const dot = badge.querySelector('span:first-child');
+            const styles = {
+                loading: { text: 'اتصال...', badge: 'bg-sky-500/15 border-sky-500/30 text-sky-300', dot: 'bg-sky-400' },
+                saving: { text: 'حفظ سحابي...', badge: 'bg-amber-500/15 border-amber-500/30 text-amber-300', dot: 'bg-amber-400' },
+                connected: { text: 'سحابي متصل', badge: 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300', dot: 'bg-emerald-400' },
+                local: { text: 'غير متصل • محلي', badge: 'bg-slate-500/15 border-slate-500/30 text-slate-300', dot: 'bg-slate-400' },
+                error: { text: 'خطأ سحابي', badge: 'bg-rose-500/15 border-rose-500/30 text-rose-300', dot: 'bg-rose-400' }
+            };
+            const chosen = styles[state] || styles.local;
+            badge.className = 'text-[10px] border px-3 py-1 rounded-full font-bold backdrop-blur-md flex items-center gap-1.5 shadow-sm transition-all duration-300 ' + chosen.badge;
+            badge.title = state === 'connected' ? 'تم الاتصال بقاعدة بيانات Supabase' :
+                state === 'local' ? 'البيانات محفوظة محلياً؛ لم يتم تأكيد الاتصال السحابي' :
+                state === 'error' ? 'تعذر تحميل البيانات أو حفظها في Supabase' : chosen.text;
+            if (label) label.textContent = chosen.text;
+            if (dot) dot.className = 'w-2 h-2 rounded-full ' + chosen.dot;
+        }
 
         function getSafeAppStateSnapshot() {
             const safeState = JSON.parse(JSON.stringify(appState));
@@ -1096,164 +1120,128 @@
             return safeState;
         }
 
-        function setCloudBadge(message, status = 'success') {
-            const badge = document.getElementById('local-status-badge');
-            const label = document.getElementById('cloud-status-text');
-            const dot = document.getElementById('cloud-status-dot');
-            if (label) label.textContent = message;
-            const palette = {
-                success: { bg: 'rgba(16,185,129,.15)', border: 'rgba(16,185,129,.3)', text: '#6ee7b7', dot: '#34d399' },
-                pending: { bg: 'rgba(245,158,11,.15)', border: 'rgba(245,158,11,.35)', text: '#fcd34d', dot: '#fbbf24' },
-                offline: { bg: 'rgba(100,116,139,.2)', border: 'rgba(148,163,184,.35)', text: '#cbd5e1', dot: '#94a3b8' },
-                error: { bg: 'rgba(244,63,94,.15)', border: 'rgba(251,113,133,.35)', text: '#fda4af', dot: '#fb7185' }
-            };
-            const colors = palette[status] || palette.success;
-            if (badge) {
-                badge.style.backgroundColor = colors.bg;
-                badge.style.borderColor = colors.border;
-                badge.style.color = colors.text;
-                badge.title = 'حالة قاعدة بيانات Supabase: ' + message;
-            }
-            if (dot) dot.style.backgroundColor = colors.dot;
-        }
-
-        function persistLocalState(options = {}) {
+        function persistLocalStateOnly() {
             try {
                 localStorage.setItem('sp_academic_local_data', JSON.stringify(getSafeAppStateSnapshot()));
-                // Record the local edit time so unsynced work can be recovered on the next launch.
-                if (options.touch !== false) {
-                    localStorage.setItem('sp_academic_local_updated_at', String(Date.now()));
-                }
+                return true;
             } catch (storageError) {
                 console.warn('Local storage save error:', storageError);
                 showToast('تعذر الحفظ المحلي؛ صدّر نسخة احتياطية لتجنب فقدان البيانات', 'error');
+                return false;
             }
-            if (options.sync !== false) scheduleSupabaseSync();
         }
 
-        function scheduleSupabaseSync() {
-            if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-                setCloudBadge('دون إنترنت · حفظ محلي', 'offline');
-                return;
-            }
-            if (supabaseSyncTimer) window.clearTimeout(supabaseSyncTimer);
-            setCloudBadge('بانتظار المزامنة السحابية', 'pending');
-            supabaseSyncTimer = window.setTimeout(() => {
-                supabaseSyncTimer = null;
-                syncSupabaseState();
-            }, 800);
+        function persistLocalState() {
+            persistLocalStateOnly();
+            // لا تكتب إلى السحابة قبل اكتمال قراءة السجل الحالي، لتجنب استبدال بيانات قديمة عند بدء التشغيل.
+            if (cloudReadyForWrites) queueCloudSave();
         }
 
-        async function syncSupabaseState() {
-            if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-                setCloudBadge('دون إنترنت · حفظ محلي', 'offline');
-                return;
-            }
-            if (supabaseSyncInFlight) {
-                supabaseSyncRequestedAgain = true;
-                return;
-            }
-            supabaseSyncInFlight = true;
-            const stateToSave = getSafeAppStateSnapshot();
-            const updatedAt = new Date().toISOString();
-            setCloudBadge('جارٍ حفظ البيانات سحابياً', 'pending');
+        function getSupabaseHeaders(extraHeaders = {}) {
+            return {
+                // مفاتيح sb_publishable ليست JWT؛ ترسل في apikey فقط.
+                'apikey': SUPABASE_PUBLISHABLE_KEY,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                ...extraHeaders
+            };
+        }
+
+        async function initializeSupabaseCloudSync() {
+            if (cloudLoadStarted) return;
+            cloudLoadStarted = true;
+            setCloudStatus('loading');
             try {
-                const response = await fetch(SUPABASE_REST_URL + 'app_state?on_conflict=id', {
-                    method: 'POST',
-                    headers: {
-                        'apikey': SUPABASE_PUBLISHABLE_KEY,
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json',
-                        'Content-Profile': 'public',
-                        'Prefer': 'resolution=merge-duplicates,return=minimal'
-                    },
-                    body: JSON.stringify({
-                        id: SUPABASE_STATE_ID,
-                        data: stateToSave,
-                        updated_at: updatedAt
-                    })
+                const queryUrl = `${SUPABASE_BACKUP_URL}?id=eq.${encodeURIComponent(SUPABASE_BACKUP_ID)}&select=id,data,updated_at`;
+                const response = await fetch(queryUrl, {
+                    method: 'GET',
+                    headers: getSupabaseHeaders({ 'Cache-Control': 'no-cache' }),
+                    cache: 'no-store'
                 });
                 if (!response.ok) {
                     const details = await response.text().catch(() => '');
-                    throw new Error('Supabase HTTP ' + response.status + (details ? ': ' + details.slice(0, 300) : ''));
+                    throw new Error(`Supabase GET ${response.status}: ${details}`);
                 }
-                try {
-                    const localModifiedAt = Number(localStorage.getItem('sp_academic_local_updated_at') || 0);
-                    const uploadedAtMs = Date.parse(updatedAt) || Date.now();
-                    if (localModifiedAt <= uploadedAtMs) {
-                        localStorage.setItem('sp_academic_local_updated_at', String(uploadedAtMs));
+                const rows = await response.json();
+                if (!Array.isArray(rows)) throw new Error('استجابة Supabase غير متوقعة');
+
+                if (rows.length > 0) {
+                    const remoteState = rows[0] && rows[0].data;
+                    if (!remoteState || typeof remoteState !== 'object' || !Array.isArray(remoteState.students) || !Array.isArray(remoteState.classes)) {
+                        throw new Error('سجل main_data موجود لكن بنية البيانات غير صالحة');
                     }
-                } catch (timestampError) {
-                    console.warn('Could not update local cloud-sync timestamp:', timestampError);
+                    appState = remoteState;
+                    delete appState.supabaseConfig;
+                    delete appState.googleConfig;
+                    normalizeAppState();
+                    persistLocalStateOnly();
+                    updateStatsBar();
+                    renderContent();
+                    cloudReadyForWrites = true;
+                    setCloudStatus('connected');
+                } else {
+                    // لا يوجد سجل بعد: احتفظ بالبيانات المحلية/الافتراضية وارفعها كنسخة أولى.
+                    cloudReadyForWrites = true;
+                    persistLocalStateOnly();
+                    queueCloudSave(0);
                 }
-                setCloudBadge('تمت المزامنة السحابية', 'success');
-            } catch (error) {
-                console.error('Supabase save error:', error);
-                setCloudBadge('تعذرت المزامنة · حفظ محلي', 'error');
-            } finally {
-                supabaseSyncInFlight = false;
-                if (supabaseSyncRequestedAgain) {
-                    supabaseSyncRequestedAgain = false;
-                    scheduleSupabaseSync();
-                }
+            } catch (cloudError) {
+                console.error('Supabase initial connection failed:', cloudError);
+                cloudReadyForWrites = false;
+                setCloudStatus('local');
+                lastCloudErrorShown = true;
+                // تبقى المنظومة قابلة للاستخدام عبر النسخة المحلية إذا تعذر الاتصال.
             }
         }
 
-        async function loadSupabaseState() {
-            setCloudBadge('جارٍ تحميل البيانات السحابية', 'pending');
-            const url = SUPABASE_REST_URL + 'app_state?id=eq.' + encodeURIComponent(SUPABASE_STATE_ID) + '&select=id,data,updated_at';
-            const response = await fetch(url, {
-                method: 'GET',
-                headers: {
-                    'apikey': SUPABASE_PUBLISHABLE_KEY,
-                    'Accept': 'application/json',
-                    'Accept-Profile': 'public',
-                    'Cache-Control': 'no-cache'
-                },
-                cache: 'no-store'
-            });
-            if (!response.ok) {
-                const details = await response.text().catch(() => '');
-                throw new Error('Supabase HTTP ' + response.status + (details ? ': ' + details.slice(0, 300) : ''));
-            }
-            const rows = await response.json();
-            const row = Array.isArray(rows) ? rows.find(item => item && item.id === SUPABASE_STATE_ID) : null;
-            if (!row || !row.data || typeof row.data !== 'object' || !Array.isArray(row.data.students) || !Array.isArray(row.data.classes)) {
-                return false;
-            }
-            const cloudUpdatedAt = Date.parse(row.updated_at || '') || 0;
-            let localUpdatedAt = 0;
-            try { localUpdatedAt = Number(localStorage.getItem('sp_academic_local_updated_at') || 0); } catch (_) {}
+        function queueCloudSave(delay = 900) {
+            if (!cloudReadyForWrites) return;
+            if (cloudSaveTimer) clearTimeout(cloudSaveTimer);
+            setCloudStatus('saving');
+            cloudSaveTimer = setTimeout(() => {
+                cloudSaveTimer = null;
+                saveStateToSupabase();
+            }, delay);
+        }
 
-            // Never discard local edits that were made after the last successful cloud write.
-            if (localUpdatedAt > cloudUpdatedAt) {
-                setCloudBadge('رفع آخر التعديلات المحلية', 'pending');
-                await syncSupabaseState();
-                return true;
+        async function saveStateToSupabase() {
+            if (!cloudReadyForWrites) return;
+            if (cloudSaveInProgress) {
+                cloudSavePending = true;
+                return;
             }
-
-            appState = row.data;
-            normalizeAppState();
-            persistLocalState({ sync: false, touch: false });
+            cloudSaveInProgress = true;
+            cloudSavePending = false;
             try {
-                localStorage.setItem('sp_academic_local_updated_at', String(cloudUpdatedAt || Date.now()));
-            } catch (timestampError) {
-                console.warn('Could not store downloaded cloud timestamp:', timestampError);
+                const payload = [{
+                    id: SUPABASE_BACKUP_ID,
+                    data: getSafeAppStateSnapshot(),
+                    updated_at: new Date().toISOString()
+                }];
+                const response = await fetch(`${SUPABASE_BACKUP_URL}?on_conflict=id`, {
+                    method: 'POST',
+                    headers: getSupabaseHeaders({ 'Prefer': 'resolution=merge-duplicates,return=minimal' }),
+                    body: JSON.stringify(payload)
+                });
+                if (!response.ok) {
+                    const details = await response.text().catch(() => '');
+                    throw new Error(`Supabase UPSERT ${response.status}: ${details}`);
+                }
+                setCloudStatus('connected');
+                lastCloudErrorShown = false;
+            } catch (cloudError) {
+                console.error('Supabase cloud save failed:', cloudError);
+                setCloudStatus('error');
+                lastCloudErrorShown = true;
+                // نسخة localStorage تبقى محفوظة حتى إن فشل رفع التغييرات.
+            } finally {
+                cloudSaveInProgress = false;
+                if (cloudSavePending && cloudReadyForWrites) queueCloudSave(0);
             }
-            setCloudBadge('تم تحميل البيانات السحابية', 'success');
-            return true;
         }
-
-        window.addEventListener('online', () => {
-            setCloudBadge('عاد الاتصال · جارٍ تجهيز المزامنة', 'pending');
-            scheduleSupabaseSync();
-        });
-        window.addEventListener('offline', () => setCloudBadge('دون إنترنت · حفظ محلي', 'offline'));
 
         function downloadLocalBackupJSON() {
-            const safeState = JSON.parse(JSON.stringify(appState));
-            delete safeState.supabaseConfig;
-            delete safeState.googleConfig;
+            const safeState = getSafeAppStateSnapshot();
             const blob = new Blob([JSON.stringify(safeState, null, 2)], { type: 'application/json;charset=utf-8' });
             const url = URL.createObjectURL(blob);
             const anchor = document.createElement('a');
@@ -1324,7 +1312,7 @@
             {
                 index: 0,
                 title: "الإعدادات والنظام",
-                subtitle: "إعدادات المدرس والمدرسة والمزامنة السحابية والنسخ الاحتياطي",
+                subtitle: "إعدادات المدرس والمدرسة والنسخ الاحتياطي المحلي",
                 icon: "fa-gear",
                 isSettings: true
             },
@@ -5564,7 +5552,7 @@
                 if (subjectInput) appState.schoolInfo.subject = subjectInput.value.trim() || appState.schoolInfo.subject || '';
                 if (yearInput) appState.schoolInfo.year = yearInput.value.trim() || appState.schoolInfo.year || '';
 
-                // يتم حفظ البيانات محلياً وجدولة المزامنة السحابية مباشرة بعد انتهاء هذا الفرع.
+                // تتم الكتابة للحفظ المحلي ومزامنة الخدمات المحلية مباشرة بعد انتهاء هذا الفرع.
                 showToast("تم حفظ بيانات المدرسة والقسم والمدرس بنجاح");
             } else if (currentModalType === 'change_login_code') {
                 const currentCode = String((document.getElementById('login-code-current') || {}).value || '').trim();
@@ -5732,14 +5720,12 @@
         }
 
         // Keep the login code separate from student data and backups.
-        window.onload = async function() {
-            let hadLocalCache = false;
+        window.onload = function() {
             try {
                 const cached = localStorage.getItem('sp_academic_local_data');
                 if (cached) {
                     const parsed = JSON.parse(cached);
-                    if (parsed && parsed.students && parsed.classes) {
-                        hadLocalCache = true;
+                    if (parsed && parsed.students) {
                         appState = parsed;
                         delete appState.supabaseConfig;
                         delete appState.googleConfig;
@@ -5751,22 +5737,10 @@
             }
 
             normalizeAppState();
-            // Keep a local copy immediately so the app remains usable if cloud access fails.
-            // `hadLocalCache` records whether this browser already had a local copy.
-            if (hadLocalCache) console.info('Local application cache found.');
-            persistLocalState({ sync: false, touch: false });
-            try {
-                const cloudHasData = await loadSupabaseState();
-                if (!cloudHasData) {
-                    // First connection: initialize app_state with this browser's current data.
-                    await syncSupabaseState();
-                }
-            } catch (cloudError) {
-                console.warn('Supabase initial load error; using local data:', cloudError);
-                setCloudBadge('تعذر الاتصال · حفظ محلي', 'error');
-            }
-
+            // احفظ التحويلات محلياً أولاً، ثم اقرأ سجل Supabase قبل السماح بأي كتابة سحابية.
+            persistLocalStateOnly();
             switchTab(1);
+            initializeSupabaseCloudSync();
             // Restrict code inputs to digits only, including the settings fields created dynamically.
             document.addEventListener('input', event => {
                 const field = event.target;
