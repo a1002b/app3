@@ -575,7 +575,7 @@
                     studyType: "صباحي",
                     year: "2025-2026", 
                     subject: "تراكيب البيانات", 
-                    behavior: "سيء", 
+                    behavior: "ضعيف", 
                     note: "كثير الغياب - إنذار أول", 
                     t1Exam: 8, t1Eval: 2,
                     t2Exam: 6, t2Eval: 1,
@@ -589,7 +589,7 @@
                         { date: "2026-09-22", day: "الثلاثاء", status: "مجاز" },
                         { date: "2026-09-29", day: "الثلاثاء", status: "غائب" }
                     ],
-                    behaviorLog: [{ mark: "سيء", stage: "الصف الأول", section: "ب", studyType: "صباحي", subject: "تراكيب البيانات", date: "2026-09-18" }]
+                    behaviorLog: [{ mark: "ضعيف", stage: "الصف الأول", section: "ب", studyType: "صباحي", subject: "تراكيب البيانات", date: "2026-09-18" }]
                 },
                 { 
                     id: 5, 
@@ -677,6 +677,7 @@
         let currentModalType = "";
         let currentAttendanceMap = {};
         let currentLoadedAttendanceStudents = [];
+        let activeBehaviorSubTab = 0;
 
         function normalizeAppState() {
             if (!appState || typeof appState !== 'object') return;
@@ -724,6 +725,7 @@
             });
             appState.calendarReminders = Array.isArray(appState.calendarReminders) ? appState.calendarReminders : [];
             appState.attendanceRecord = appState.attendanceRecord && typeof appState.attendanceRecord === 'object' ? appState.attendanceRecord : {};
+            appState.participationRecords = Array.isArray(appState.participationRecords) ? appState.participationRecords : [];
             appState.classes.forEach(cls => { cls.name = convertSchoolTerm(cls.name); });
             appState.students.forEach(student => {
                 student.class = convertSchoolTerm(student.class);
@@ -750,7 +752,12 @@
                 if (student.id !== undefined && student.id !== null) student.id = typeof student.id === 'string' && student.id.trim() !== '' ? (Number.isFinite(Number(student.id)) ? Number(student.id) : student.id) : student.id;
                 if (!Array.isArray(student.absenceLog)) student.absenceLog = [];
                 if (!Array.isArray(student.behaviorLog)) student.behaviorLog = [];
-                student.behaviorLog.forEach(log => { if (log && log.stage) log.stage = convertSchoolTerm(log.stage); });
+                if (student.behavior === 'سيء') student.behavior = 'ضعيف';
+                student.behaviorLog.forEach(log => {
+                    if (!log) return;
+                    if (log.stage) log.stage = convertSchoolTerm(log.stage);
+                    if (log.mark === 'سيء') log.mark = 'ضعيف';
+                });
             });
             appState.subjects.forEach(subject => { if (subject) subject.class = convertSchoolTerm(subject.class); });
             appState.schedule.forEach(item => { if (item) item.className = convertSchoolTerm(item.className); });
@@ -1132,9 +1139,10 @@
         }
 
         function persistLocalState() {
-            persistLocalStateOnly();
+            const savedLocally = persistLocalStateOnly();
             // لا تكتب إلى السحابة قبل اكتمال قراءة السجل الحالي، لتجنب استبدال بيانات قديمة عند بدء التشغيل.
-            if (cloudReadyForWrites) queueCloudSave();
+            if (savedLocally && cloudReadyForWrites) queueCloudSave();
+            return savedLocally;
         }
 
         function getSupabaseHeaders(extraHeaders = {}) {
@@ -1581,17 +1589,21 @@
                         <div class="grid grid-cols-2 gap-2">
                             <div>
                                 <label class="block text-[10px] font-extrabold text-slate-600 mb-1">المادة الدراسية:</label>
-                                <select id="beh-filter-subject" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold text-slate-700 outline-none">
+                                <select id="beh-filter-subject" onchange="renderBehaviorStudentsList()" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold text-slate-700 outline-none">
                                     ${subOpts || '<option>عام</option>'}
                                 </select>
                             </div>
                             <div>
                                 <label class="block text-[10px] font-extrabold text-slate-600 mb-1">التاريخ:</label>
-                                <input id="beh-filter-date" type="date" value="${new Date().toISOString().split('T')[0]}" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold text-slate-700 outline-none">
+                                <input id="beh-filter-date" type="date" value="${getLocalDateKey(new Date())}" onchange="renderBehaviorStudentsList()" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold text-slate-700 outline-none">
                             </div>
                         </div>
                     </div>
 
+                    <div class="flex bg-slate-200/80 p-1 rounded-2xl text-[10px] font-black text-slate-700 gap-1">
+                        <button type="button" onclick="switchBehaviorSubTab(0)" id="beh-subtab-0" class="flex-1 py-2 rounded-xl ${activeBehaviorSubTab === 0 ? 'bg-slate-900 text-amber-400 shadow-sm' : 'hover:bg-slate-300'}">سجل النشاط</button>
+                        <button type="button" onclick="switchBehaviorSubTab(1)" id="beh-subtab-1" class="flex-1 py-2 rounded-xl ${activeBehaviorSubTab === 1 ? 'bg-slate-900 text-amber-400 shadow-sm' : 'hover:bg-slate-300'}">المشاركة</button>
+                    </div>
                     <div id="behavior-students-list" class="space-y-2"></div>
                 </div>
             `;
@@ -1604,6 +1616,7 @@
             const classFilterVal = document.getElementById('beh-filter-class') ? document.getElementById('beh-filter-class').value : 'all';
             const container = document.getElementById('behavior-students-list');
             if (!container) return;
+            if (activeBehaviorSubTab === 1) { renderParticipationStudentsList(container); return; }
 
             let filtered = [...appState.students];
 
@@ -1634,7 +1647,7 @@
                 let badgeClass = 'bg-slate-100 text-slate-700';
                 if (st.behavior === 'مميز') badgeClass = 'bg-emerald-50 text-emerald-700 border border-emerald-200';
                 else if (st.behavior === 'متوسط') badgeClass = 'bg-amber-50 text-amber-700 border border-amber-200';
-                else if (st.behavior === 'سيء') badgeClass = 'bg-rose-50 text-rose-700 border border-rose-200';
+                else if (st.behavior === 'ضعيف' || st.behavior === 'سيء') badgeClass = 'bg-rose-50 text-rose-700 border border-rose-200';
 
                 return `
                     <div class="bg-white rounded-2xl p-3 shadow-sm border border-slate-200/80 mb-2">
@@ -1660,9 +1673,9 @@
                                 <i class="fa-solid fa-minus text-[9px]"></i>
                                 <span>متوسط</span>
                             </button>
-                            <button onclick="assignStudentMark(${st.id}, 'سيء')" class="flex-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 py-1 rounded-xl text-[10px] font-black transition-all flex items-center justify-center gap-1">
+                            <button onclick="assignStudentMark(${st.id}, 'ضعيف')" class="flex-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 py-1 rounded-xl text-[10px] font-black transition-all flex items-center justify-center gap-1">
                                 <i class="fa-solid fa-triangle-exclamation text-[9px]"></i>
-                                <span>سيء</span>
+                                <span>ضعيف</span>
                             </button>
                         </div>
                     </div>
@@ -1670,6 +1683,67 @@
             }).join('');
 
             container.innerHTML = html;
+        }
+
+        function switchBehaviorSubTab(index) {
+            activeBehaviorSubTab = Number(index) === 1 ? 1 : 0;
+            [0, 1].forEach(i => {
+                const button = document.getElementById(`beh-subtab-${i}`);
+                if (button) button.className = `flex-1 py-2 rounded-xl ${i === activeBehaviorSubTab ? 'bg-slate-900 text-amber-400 shadow-sm' : 'hover:bg-slate-300'}`;
+            });
+            renderBehaviorStudentsList();
+        }
+
+        function getParticipationContextKey(studentId, date, subject) {
+            const student = appState.students.find(item => String(item.id) === String(studentId));
+            if (!student) return '';
+            return [student.id, student.class, student.section, student.studyType || 'صباحي', subject || '', date || ''].map(normalizeAcademicText).join('||');
+        }
+
+        function renderParticipationStudentsList(container) {
+            const classValue = (document.getElementById('beh-filter-class') || {}).value || 'all';
+            const subject = (document.getElementById('beh-filter-subject') || {}).value || '';
+            const date = (document.getElementById('beh-filter-date') || {}).value || getLocalDateKey();
+            let students = [...appState.students];
+            if (classValue !== 'all') {
+                const [className, section, studyType] = classValue.split(' - ');
+                students = students.filter(st => st.class.trim() === (className || '').trim() && st.section.trim() === (section || '').trim() && (st.studyType || 'صباحي').trim() === (studyType || 'صباحي').trim());
+            }
+            if (subject) students = students.filter(st => isSubjectAssignedToStudentClass(subject, st));
+            students = sortStudentsAlphabetically(students);
+            if (!students.length) {
+                container.innerHTML = '<div class="bg-white rounded-3xl p-5 text-center border border-slate-200"><p class="text-xs text-slate-500 font-bold">لا يوجد طلبة مطابقين للفلاتر المحددة</p></div>';
+                return;
+            }
+            container.innerHTML = students.map((st, index) => {
+                const key = getParticipationContextKey(st.id, date, subject);
+                const record = (appState.participationRecords || []).find(item => item.key === key);
+                const status = record ? record.status : '';
+                return `<div class="bg-white rounded-2xl p-3 shadow-sm border border-slate-200/80 mb-2">
+                    <div class="flex items-center justify-between mb-2"><div><h4 class="font-bold text-xs text-slate-800">${index + 1}. ${escapeHtml(st.name)}</h4><p class="text-[10px] text-slate-400">${escapeHtml(st.class)} (${escapeHtml(st.section)}) · ${escapeHtml(st.studyType || 'صباحي')}</p></div>
+                    <span class="text-[10px] font-black ${status === 'شارك' ? 'text-emerald-700' : status === 'لم يشارك' ? 'text-rose-700' : 'text-slate-400'}">${status || 'لم يُقيّم'}</span></div>
+                    <div class="flex gap-2"><button type="button" onclick="setStudentParticipation('${String(st.id).replace(/'/g, '')}', 'شارك')" class="flex-1 rounded-xl border py-2 text-[10px] font-black ${status === 'شارك' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}">شارك</button>
+                    <button type="button" onclick="setStudentParticipation('${String(st.id).replace(/'/g, '')}', 'لم يشارك')" class="flex-1 rounded-xl border py-2 text-[10px] font-black ${status === 'لم يشارك' ? 'bg-rose-600 text-white border-rose-600' : 'bg-rose-50 text-rose-700 border-rose-200'}">لم يشارك</button></div>
+                </div>`;
+            }).join('');
+        }
+
+        function setStudentParticipation(studentId, status) {
+            const student = appState.students.find(item => String(item.id) === String(studentId));
+            if (!student) return;
+            const date = (document.getElementById('beh-filter-date') || {}).value || getLocalDateKey();
+            const subject = (document.getElementById('beh-filter-subject') || {}).value || '';
+            if (!subject || !isSubjectAssignedToStudentClass(subject, student)) {
+                showToast('اختر مادة مرتبطة بصف الطالب وشعبته أولاً', 'error'); return;
+            }
+            if (!Array.isArray(appState.participationRecords)) appState.participationRecords = [];
+            const key = getParticipationContextKey(studentId, date, subject);
+            const old = appState.participationRecords.find(item => item.key === key);
+            if (old) { old.status = status; old.date = date; old.subject = subject; old.studentId = student.id; }
+            else appState.participationRecords.push({ id: Date.now() + Math.random(), key, studentId: student.id, className: student.class, section: student.section, studyType: student.studyType || 'صباحي', subject, date, status });
+            persistLocalState();
+            renderParticipationStudentsList(document.getElementById('behavior-students-list'));
+            showToast(`تم تسجيل ${status} للطالب ${student.name}`);
         }
 
         function assignStudentMark(studentId, mark) {
@@ -2343,7 +2417,19 @@
                 if (component.key === 'Attendance' && student) {
                     return gradeNumber(getLinkedAttendanceGrade(student, prefix, month, subjectName || getGradeSubjectContext(student), storedValue));
                 }
-                return gradeNumber(storedValue);
+                let value = gradeNumber(storedValue);
+                if (component.key === 'Activity' && student && value !== null) {
+                    const activitySubject = String(subjectName || getGradeSubjectContext(student) || '').trim();
+                    const badCount = (Array.isArray(student.behaviorLog) ? student.behaviorLog : []).filter(log =>
+                        log && (log.mark === 'ضعيف' || log.mark === 'سيء') &&
+                        normalizeAcademicText(log.subject) === normalizeAcademicText(activitySubject) &&
+                        normalizeAcademicText(log.stage || student.class) === normalizeAcademicText(student.class) &&
+                        normalizeAcademicText(log.section == null ? student.section : log.section) === normalizeAcademicText(student.section) &&
+                        normalizeAcademicText(log.studyType || student.studyType || 'صباحي') === normalizeAcademicText(student.studyType || 'صباحي')
+                    ).length;
+                    value = Math.max(0, value - Math.min(5, badCount));
+                }
+                return value;
             });
             const componentHasAny = values.some(value => value !== null);
             const componentsComplete = values.every(value => value !== null);
@@ -2822,6 +2908,8 @@
             const title = ((document.getElementById('memo-title') || {}).value || '').trim();
             const content = ((document.getElementById('memo-content') || {}).value || '').trim();
             if (!title && !content) { showToast('اكتب عنوان الملاحظة أو نصها أولاً', 'error'); return; }
+            if (!Array.isArray(appState.notes)) appState.notes = [];
+            const previousSnapshot = JSON.stringify(appState.notes);
             const now = Date.now();
             let note = appState.notes.find(item => String(item.id) === String(activeMemoId));
             if (note) {
@@ -2831,13 +2919,21 @@
                 while (appState.notes.some(item => String(item.id) === String(uniqueId))) uniqueId += 1;
                 note = { id: uniqueId, date, title: title || 'ملاحظة بدون عنوان', content, createdAt: now, updatedAt: now };
                 appState.notes.push(note);
-                activeMemoId = note.id;
             }
             selectedCalendarDate = date;
-            persistLocalState();
+            const saved = persistLocalState();
+            if (!saved) {
+                // Keep the draft visible so the user can retry instead of silently losing it.
+                activeMemoId = note.id;
+                activeNotesView = 'memo-editor';
+                renderNotesTab(document.getElementById('app-content'));
+                showToast('تعذر حفظ الملاحظة على هذا الجهاز؛ تحقق من مساحة التخزين ثم أعد المحاولة', 'error');
+                return;
+            }
+            activeMemoId = null;
             activeNotesView = 'memo-list';
             renderNotesTab(document.getElementById('app-content'));
-            showToast('تم حفظ الملاحظة');
+            showToast('تم حفظ الملاحظة بنجاح');
         }
 
         function deleteMemo(id) {
@@ -3241,6 +3337,7 @@
                 att_monthly: updateMonthlyAttReport,
                 grades_term_specific: updateTermSpecificGradesReport,
                 behavior_summary: updateBehaviorReport,
+                participation_summary: updateParticipationReport,
                 all_students: updateAllStudentsReport,
                 students_by_section: updateStudentsBySectionReport,
                 grades_by_section: updateGradesSectionReport,
@@ -3287,7 +3384,8 @@
                             <p class="text-[10px] font-bold text-slate-700">تقارير السجلات والقيود المدرسية والمتابعة للطلبة</p>
                         </div>
 
-                        ${renderReportButton('behavior_summary', 'تقرير المتابعة', 'حساب عدد العلامات (مميز، متوسط، سيء) لكل طالب وطباعتها حسب الصف والشعبة والدراسة', 'fa-star-half-stroke', 'bg-amber-50 text-amber-600')}
+                        ${renderReportButton('behavior_summary', 'تقرير المتابعة', 'حساب عدد العلامات (مميز، متوسط، ضعيف) لكل طالب وطباعتها حسب الصف والشعبة والدراسة', 'fa-star-half-stroke', 'bg-amber-50 text-amber-600')}
+                        ${renderReportButton('participation_summary', 'تقرير المشاركة', 'عدد مرات المشاركة وعدم المشاركة لكل طالب حسب الصف والشعبة والمادة', 'fa-hand', 'bg-emerald-50 text-emerald-600')}
                         ${renderReportButton('all_students', 'قائمة جميع الطلبة', 'عرض وطباعة أسماء الطلبة حسب الصف والشعبة ونوع الدراسة المحددة', 'fa-users-line', 'bg-blue-50 text-blue-600')}
                         ${renderReportButton('students_by_section', 'قائمة طلبة حسب شعبة معينة', 'طباعة أسماء الطلاب حسب الصف والشعبة الأكاديمية والدراسة', 'fa-network-wired', 'bg-emerald-50 text-emerald-600')}
                         ${renderReportButton('students_by_year', 'قائمة حسب السنة الدراسية', 'قوائم وقيود الطلبة للعام الدراسي الحالي', 'fa-calendar-check', 'bg-rose-50 text-rose-600')}
@@ -3631,7 +3729,7 @@
                                     <th class="p-2">اسم الطالب</th>
                                     <th class="p-2 text-center text-emerald-400">مميز</th>
                                     <th class="p-2 text-center text-amber-400">متوسط</th>
-                                    <th class="p-2 text-center text-rose-400">سيء</th>
+                                    <th class="p-2 text-center text-rose-400">ضعيف</th>
                                     <th class="p-2 text-center">التقييم العام</th>
                                 </tr>
                             </thead>
@@ -3640,7 +3738,37 @@
                     </div>
                 `;
                 updateBehaviorReport();
-            } 
+            }
+            // 5 مكرر. تقرير إحصائية المشاركة وعدم المشاركة لكل طالب
+            else if (reportKey === 'participation_summary') {
+                titleEl.innerText = "تقرير المشاركة وعدم المشاركة";
+                iconEl.className = "fa-solid fa-hand";
+                bodyEl.innerHTML = getPrintableHeader("rep-part-stage") + `
+                    <div class="no-print mb-2.5 print-hidden-control">
+                        <label class="block text-[10px] font-bold text-slate-600 mb-1">الصف والشعبة ونوع الدراسة:</label>
+                        <select id="rep-part-class" onchange="updateParticipationReport()" class="w-full bg-slate-50 border p-2 rounded-xl text-xs font-bold">
+                            <option value="all">جميع الصفوف والشعب</option>
+                            ${classSelectOptions}
+                        </select>
+                    </div>
+                    ${getSearchInputHtml("updateParticipationReport")}
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-right">
+                            <thead class="bg-slate-900 text-amber-400 text-[10px]">
+                                <tr>
+                                    <th class="p-2 text-center">#</th>
+                                    <th class="p-2">اسم الطالب</th>
+                                    <th class="p-2">الصف والشعبة</th>
+                                    <th class="p-2 text-center text-emerald-400">مرات المشاركة</th>
+                                    <th class="p-2 text-center text-rose-400">مرات عدم المشاركة</th>
+                                </tr>
+                            </thead>
+                            <tbody id="participation-report-body"></tbody>
+                        </table>
+                    </div>
+                `;
+                updateParticipationReport();
+            }
             // 6. تقرير قائمة جميع الطلبة
             else if (reportKey === 'all_students') {
                 titleEl.innerText = "تقرير قائمة جميع الطلبة";
@@ -4156,12 +4284,12 @@
                     relevantBehaviorLogs.forEach(log => {
                         if (log.mark === 'مميز') excellentCount++;
                         else if (log.mark === 'متوسط') averageCount++;
-                        else if (log.mark === 'سيء') poorCount++;
+                        else if (log.mark === 'ضعيف' || log.mark === 'سيء') poorCount++;
                     });
                 } else if (reportSubject === 'all' || normalizeReportValue(s.subject) === normalizeReportValue(reportSubject)) {
                     if (s.behavior === 'مميز') excellentCount = 1;
                     else if (s.behavior === 'متوسط') averageCount = 1;
-                    else if (s.behavior === 'سيء') poorCount = 1;
+                    else if (s.behavior === 'ضعيف' || s.behavior === 'سيء') poorCount = 1;
                 }
 
                 let badgeClass = s.behavior === 'مميز' ? 'bg-emerald-100 text-emerald-800' : s.behavior === 'متوسط' ? 'bg-amber-100 text-amber-800' : 'bg-rose-100 text-rose-800';
@@ -4183,6 +4311,50 @@
             }).join('');
 
             document.getElementById('behavior-report-body').innerHTML = rows || '<tr><td colspan="6" class="p-3 text-center text-xs text-slate-400">لا يوجد طلبة مطابقين للشروط</td></tr>';
+        }
+
+        // تقرير المشاركة: يحسب كل سجل مشاركة محفوظ لكل طالب، مع احترام فلاتر الصف والمادة والبحث.
+        function updateParticipationReport() {
+            const classSelect = document.getElementById('rep-part-class');
+            const body = document.getElementById('participation-report-body');
+            if (!body) return;
+
+            const classFilterVal = classSelect ? classSelect.value : 'all';
+            const searchKey = getSearchKeyword();
+            const reportSubject = getSelectedReportSubject();
+            setPrintHeaderStageLabelUnified('rep-part-stage', classFilterVal);
+
+            let filtered = [...appState.students].filter(student => reportStudentMatchesClass(student, classFilterVal));
+            if (searchKey) filtered = filtered.filter(student => String(student.name || '').toLocaleLowerCase('ar').includes(searchKey));
+            filtered = sortStudentsAlphabetically(filterStudentsForReportSubject(filtered, reportSubject));
+
+            const participationCounts = new Map();
+            const records = (Array.isArray(appState.participationRecords) ? appState.participationRecords : []).filter(record =>
+                record && (reportSubject === 'all' || normalizeReportValue(record.subject) === normalizeReportValue(reportSubject))
+            );
+            records.forEach(record => {
+                const studentId = String(record.studentId == null ? '' : record.studentId);
+                if (!studentId) return;
+                if (!participationCounts.has(studentId)) participationCounts.set(studentId, { participated: 0, notParticipated: 0 });
+                const counts = participationCounts.get(studentId);
+                if (record.status === 'شارك') counts.participated++;
+                else if (record.status === 'لم يشارك') counts.notParticipated++;
+            });
+
+            const rows = filtered.map((student, index) => {
+                const counts = participationCounts.get(String(student.id)) || { participated: 0, notParticipated: 0 };
+                return `
+                    <tr class="border-b border-slate-100 text-[11px]">
+                        <td class="p-2 text-center font-bold">${index + 1}</td>
+                        <td class="p-2 font-bold text-slate-800">${escapeHtml(student.name || '')}</td>
+                        <td class="p-2 text-slate-600">${escapeHtml(student.class || '')} (${escapeHtml(student.section || '')}) - ${escapeHtml(student.studyType || 'صباحي')}</td>
+                        <td class="p-2 text-center text-emerald-700 font-black">${counts.participated}</td>
+                        <td class="p-2 text-center text-rose-700 font-black">${counts.notParticipated}</td>
+                    </tr>
+                `;
+            }).join('');
+
+            body.innerHTML = rows || '<tr><td colspan="5" class="p-3 text-center text-xs text-slate-400">لا يوجد طلبة مطابقين للشروط</td></tr>';
         }
 
         // 6. تقرير قائمة جميع الطلبة
